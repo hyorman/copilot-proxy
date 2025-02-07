@@ -1,0 +1,49 @@
+{
+  "name": "@copilot-proxy/cli",
+  "version": "1.0.0",
+  "description": "OpenAI-compatible proxy server for GitHub Copilot, powered by the Copilot SDK",
+  "type": "module",
+  "main": "out/main.js",
+  "bin": {
+    "copilot-proxy": "out/main.js"
+  },
+  "license": "MIT",
+  "author": "hyorman",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyorman/copilot-proxy.git",
+    "directory": "packages/cli"
+  },
+  "keywords": [
+    "copilot",
+    "openai",
+    "proxy",
+    "github",
+    "cli",
+    "llm"
+  ],
+  "files": [
+    "out"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "start": "node out/main.js",
+    "dev": "npx tsx src/main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@copilot-proxy/core": "^1.0.0",
+    "@github/copilot-sdk": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

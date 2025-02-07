@@ -1,0 +1,85 @@
+{
+  "name": "copilot-proxy",
+  "displayName": "Copilot Proxy",
+  "icon": "assets/icon.jpg",
+  "version": "1.0.0",
+  "description": "OpenAI-compatible proxy for GitHub Copilot",
+  "publisher": "hyorman",
+  "license": "MIT",
+  "author": "hyorman",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyorman/copilot-proxy.git"
+  },
+  "categories": [
+    "AI",
+    "Other",
+    "Chat",
+    "Machine Learning"
+  ],
+  "type": "commonjs",
+  "main": "./out/extension.js",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "enabledApiProposals": [
+    "embeddings"
+  ],
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Copilot Proxy",
+      "properties": {
+        "copilotProxy.port": {
+          "type": "number",
+          "default": 3000,
+          "description": "Port for the Express server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "copilotProxy.startServer",
+        "title": "Copilot Proxy: Start Server"
+      },
+      {
+        "command": "copilotProxy.stopServer",
+        "title": "Copilot Proxy: Stop Server"
+      },
+      {
+        "command": "copilotProxy.listModels",
+        "title": "Copilot Proxy: List Models"
+      },
+      {
+        "command": "copilotProxy.configurePort",
+        "title": "Copilot Proxy: Configure Port"
+      },
+      {
+        "command": "copilotProxy.createApiToken",
+        "title": "Copilot Proxy: Create API Token"
+      },
+      {
+        "command": "copilotProxy.listApiTokens",
+        "title": "Copilot Proxy: List API Tokens"
+      },
+      {
+        "command": "copilotProxy.removeApiToken",
+        "title": "Copilot Proxy: Remove API Token"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:check": "tsc --noEmit",
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@copilot-proxy/core": "*",
+    "@types/node": "^18.11.18",
+    "@types/vscode": "^1.95.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.0.18"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "out",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "declaration": true
+  },
+  "include": ["src", "vscode.proposed.embeddings.d.ts"],
+  "references": [
+    { "path": "../core" }
+  ]
+}

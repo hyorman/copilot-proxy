@@ -1,0 +1,12 @@
+node_modules
+out
+*.tsbuildinfo
+.venv
+.DS_Store
+vitest.config.js
+vitest.config.js.map
+test/**/*.js
+test/**/*.js.map
+.vscode
+*.vsix
+.env

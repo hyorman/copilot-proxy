@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "out",
+    "declaration": true,
+    "composite": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "out", "test", "vitest.config.ts"]
+}
