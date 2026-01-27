@@ -1,28 +1,31 @@
 {
   "name": "copilot-proxy",
-  "version": "1.0.2",
-  "description": "copilot-proxy for aider",
+  "displayName": "Copilot Proxy",
+  "version": "1.0.3",
+  "description": "OpenAI compatible proxy for GitHub Copilot",
   "publisher": "PoAI",
   "license": "ISC",
   "author": "Lutz Leonhardt",
+  "readme": "README.md",
   "repository": {
     "type": "git",
     "url": "https://github.com/yourusername/copilot-proxy.git"
   },
+   "categories": [
+    "AI",
+    "Other"
+  ],
   "type": "commonjs",
   "main": "./out/extension.js",
-  "files": [
-    "out",
-    "README.md"
+  "activationEvents": [
+    "onCommand:copilotProxy.startServer",
+    "onCommand:copilotProxy.stopServer",
+    "onCommand:copilotProxy.listModels",
+    "onCommand:copilotProxy.configurePort"
   ],
   "engines": {
-    "vscode": "^1.70.0"
+    "vscode": "^1.95.0"
   },
-  "activationEvents": [
-    "onCommand:Copilot Proxy - Start Server",
-    "onCommand:Copilot Proxy - Stop Server",
-    "onCommand:Copilot Proxy: Configure Port"
-  ],
   "contributes": {
     "configuration": {
       "type": "object",
@@ -37,15 +40,19 @@
     },
     "commands": [
       {
-        "command": "Copilot Proxy - Start Server",
-        "title": "Copilot Proxy - Start Server"
+        "command": "copilotProxy.startServer",
+        "title": "Copilot Proxy: Start Server"
       },
       {
-        "command": "Copilot Proxy - Stop Server",
-        "title": "Copilot Proxy - Stop Server"
+        "command": "copilotProxy.stopServer",
+        "title": "Copilot Proxy: Stop Server"
       },
       {
-        "command": "Copilot Proxy: Configure Port",
+        "command": "copilotProxy.listModels",
+        "title": "Copilot Proxy: List Models"
+      },
+      {
+        "command": "copilotProxy.configurePort",
         "title": "Copilot Proxy: Configure Port"
       }
     ]
@@ -53,7 +60,7 @@
   "scripts": {
     "build": "tsc",
     "start": "ts-node src/server.ts",
-    "vsix": "vsce package"
+    "package": "npm run build && npx @vscode/vsce package"
   },
   "dependencies": {
     "dotenv": "^16.0.0",
@@ -66,7 +73,6 @@
     "@types/node": "^18.11.18",
     "@types/vscode": "^1.70.0",
     "ts-node": "^10.9.1",
-    "typescript": "^4.9.5",
-    "vsce": "^2.15.0"
+    "typescript": "^4.9.5"
   }
 }

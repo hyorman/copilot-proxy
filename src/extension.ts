@@ -8,8 +8,19 @@ import {
   ChatCompletionResponse,
   StructuredMessageContent
 } from './types';
+import { state, SerializedState } from './assistants';
 
 let serverInstance: ReturnType<typeof startServer> | undefined;
+
+// Model info interface for getAvailableModels
+interface ModelInfo {
+  vendor: string;
+  family: string;
+  id?: string;
+}
+
+// State persistence key
+const STATE_KEY = 'copilotProxy.assistantsState';
 
 function configurePort() {
   const config = vscode.workspace.getConfiguration("copilotProxy");
@@ -34,6 +45,18 @@ function configurePort() {
   });
 }
 
+/**
+ * Get available models from VS Code Language Model API
+ */
+export async function getAvailableModels(): Promise<ModelInfo[]> {
+  const models = await vscode.lm.selectChatModels({});
+  return models.map(m => ({
+    vendor: m.vendor,
+    family: m.family,
+    id: (m as any).id
+  }));
+}
+
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('Copilot Proxy Log');
@@ -41,9 +64,30 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(outputChannel);
   outputChannel.appendLine('Extension "Copilot Proxy" is now active!');
 
+  // ==================== State Persistence ====================
+  
+  // Restore state from globalState
+  const savedState = context.globalState.get<SerializedState>(STATE_KEY);
+  if (savedState) {
+    try {
+      state.restore(savedState);
+      outputChannel.appendLine('Restored assistants state from previous session.');
+    } catch (err) {
+      outputChannel.appendLine(`Error restoring state: ${err}`);
+    }
+  }
+
+  // Set up persistence callback with debounce
+  state.setPersistCallback((data) => {
+    context.globalState.update(STATE_KEY, data).then(
+      () => outputChannel.appendLine('Assistants state saved.'),
+      (err) => outputChannel.appendLine(`Error saving state: ${err}`)
+    );
+  }, 1000); // 1 second debounce
+
   // Register command to start the Express server.
   context.subscriptions.push(
-    vscode.commands.registerCommand('Copilot Proxy - Start Server', () => {
+    vscode.commands.registerCommand('copilotProxy.startServer', () => {
       if (!serverInstance) {
         const configPort = vscode.workspace.getConfiguration("copilotProxy").get("port", 3000);
         serverInstance = startServer(configPort);
@@ -56,7 +100,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Register command to stop the Express server.
   context.subscriptions.push(
-    vscode.commands.registerCommand('Copilot Proxy - Stop Server', () => {
+    vscode.commands.registerCommand('copilotProxy.stopServer', () => {
       if (serverInstance) {
         serverInstance.close();
         serverInstance = undefined;
@@ -69,8 +113,29 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Register command to configure the port.
   context.subscriptions.push(
-    vscode.commands.registerCommand('Copilot Proxy: Configure Port', () => {
+    vscode.commands.registerCommand('copilotProxy.configurePort', () => {
       configurePort();
+    })
+  );
+
+  // Register command to list available LLM models via the VS Code picker.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilotProxy.listModels', async () => {
+      try {
+        const models = await vscode.lm.selectChatModels({});
+        if (!models || models.length === 0) {
+          vscode.window.showInformationMessage('No model selected.');
+          return;
+        }
+        outputChannel.appendLine('Available/selected models:');
+        for (const m of models) {
+          outputChannel.appendLine(`vendor: ${m.vendor}, family: ${m.family}${(m as any).id ? ', id: '+(m as any).id : ''}`);
+        }
+        vscode.window.showInformationMessage('Model info written to Copilot Proxy Log');
+      } catch (err) {
+        outputChannel.appendLine(`Error listing models: ${String(err)}`);
+        vscode.window.showErrorMessage('Failed to list models (see Copilot Proxy Log).');
+      }
     })
   );
 
@@ -113,15 +178,47 @@ export async function processChatRequest(request: ChatCompletionRequest): Promis
   outputChannel.appendLine(`Request received. Model: ${request.model}. Preview: ${preview}`);
   outputChannel.appendLine(`Full messages: ${JSON.stringify(request.messages, null, 2)}`);
   
-  // Map request messages to vscode.LanguageModelChatMessage format with content extraction
-  const chatMessages = request.messages.map(message => {
-    const processedContent = extractMessageContent(message.content);
-    if (message.role.toLowerCase() === "user") {
-      return vscode.LanguageModelChatMessage.User(processedContent);
-    } else {
-      return vscode.LanguageModelChatMessage.Assistant(processedContent);
+  // Extract system messages and combine their content
+  const systemMessages = request.messages.filter(message => message.role.toLowerCase() === "system");
+  const systemContent = systemMessages
+    .map(msg => extractMessageContent(msg.content))
+    .filter(content => content.length > 0)
+    .join('\n\n');
+  
+  // Map request messages to vscode.LanguageModelChatMessage format
+  // Prepend system content to the first user message (VS Code LM API has no SystemMessage)
+  const chatMessages: vscode.LanguageModelChatMessage[] = [];
+  let systemPrepended = false;
+  
+  for (const message of request.messages) {
+    const role = message.role.toLowerCase();
+    
+    // Skip system messages as we'll prepend them to the first user message
+    if (role === "system") {
+      continue;
     }
-  });
+    
+    const processedContent = extractMessageContent(message.content);
+    
+    if (role === "user") {
+      if (!systemPrepended && systemContent) {
+        // Prepend system instructions to first user message
+        const combinedContent = `${systemContent}\n\n---\n\n${processedContent}`;
+        chatMessages.push(vscode.LanguageModelChatMessage.User(combinedContent));
+        systemPrepended = true;
+      } else {
+        chatMessages.push(vscode.LanguageModelChatMessage.User(processedContent));
+      }
+    } else {
+      // Assistant message
+      chatMessages.push(vscode.LanguageModelChatMessage.Assistant(processedContent));
+    }
+  }
+  
+  // If no user messages but we have system content, add it as a user message
+  if (!systemPrepended && systemContent) {
+    chatMessages.unshift(vscode.LanguageModelChatMessage.User(systemContent));
+  }
 
   const [selectedModel] = await vscode.lm.selectChatModels({
     vendor: "copilot",
