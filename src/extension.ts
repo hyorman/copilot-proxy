@@ -65,7 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
   outputChannel.appendLine('Extension "Copilot Proxy" is now active!');
 
   // ==================== State Persistence ====================
-  
+
   // Restore state from globalState
   const savedState = context.globalState.get<SerializedState>(STATE_KEY);
   if (savedState) {
@@ -84,6 +84,13 @@ export function activate(context: vscode.ExtensionContext) {
       (err) => outputChannel.appendLine(`Error saving state: ${err}`)
     );
   }, 1000); // 1 second debounce
+
+  // Auto-start the server on extension activation
+  if (!serverInstance) {
+    const configPort = vscode.workspace.getConfiguration("copilotProxy").get("port", 3000);
+    serverInstance = startServer(configPort);
+    outputChannel.appendLine(`Express server auto-started on port ${configPort}.`);
+  }
 
   // Register command to start the Express server.
   context.subscriptions.push(
@@ -158,7 +165,10 @@ export function deactivate() {
   }
 }
 
-function extractMessageContent(content: string | StructuredMessageContent[]): string {
+function extractMessageContent(content: string | StructuredMessageContent[] | null | undefined): string {
+  if (content === null || content === undefined) {
+    return '';
+  }
   if (typeof content === 'string') {
     return content;
   }
@@ -171,35 +181,35 @@ function extractMessageContent(content: string | StructuredMessageContent[]): st
 export async function processChatRequest(request: ChatCompletionRequest): Promise<AsyncIterable<ChatCompletionChunk> | ChatCompletionResponse> {
   const userMessages = request.messages.filter(message => message.role.toLowerCase() === "user");
   const latestUserMessage = userMessages.length > 0 ? userMessages[userMessages.length - 1].content : '';
-  const preview = typeof latestUserMessage === 'string' 
+  const preview = typeof latestUserMessage === 'string'
     ? (latestUserMessage.length > 30 ? latestUserMessage.slice(0, 30) + '...' : latestUserMessage)
     : JSON.stringify(latestUserMessage);
-  
+
   outputChannel.appendLine(`Request received. Model: ${request.model}. Preview: ${preview}`);
   outputChannel.appendLine(`Full messages: ${JSON.stringify(request.messages, null, 2)}`);
-  
+
   // Extract system messages and combine their content
   const systemMessages = request.messages.filter(message => message.role.toLowerCase() === "system");
   const systemContent = systemMessages
     .map(msg => extractMessageContent(msg.content))
     .filter(content => content.length > 0)
     .join('\n\n');
-  
+
   // Map request messages to vscode.LanguageModelChatMessage format
   // Prepend system content to the first user message (VS Code LM API has no SystemMessage)
   const chatMessages: vscode.LanguageModelChatMessage[] = [];
   let systemPrepended = false;
-  
+
   for (const message of request.messages) {
     const role = message.role.toLowerCase();
-    
+
     // Skip system messages as we'll prepend them to the first user message
     if (role === "system") {
       continue;
     }
-    
+
     const processedContent = extractMessageContent(message.content);
-    
+
     if (role === "user") {
       if (!systemPrepended && systemContent) {
         // Prepend system instructions to first user message
@@ -214,7 +224,7 @@ export async function processChatRequest(request: ChatCompletionRequest): Promis
       chatMessages.push(vscode.LanguageModelChatMessage.Assistant(processedContent));
     }
   }
-  
+
   // If no user messages but we have system content, add it as a user message
   if (!systemPrepended && systemContent) {
     chatMessages.unshift(vscode.LanguageModelChatMessage.User(systemContent));

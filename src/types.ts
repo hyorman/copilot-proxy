@@ -5,7 +5,10 @@ export interface StructuredMessageContent {
 
 export interface ChatMessage {
   role: string;
-  content: string | StructuredMessageContent[];
+  content: string | StructuredMessageContent[] | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface ChatCompletionRequest {
@@ -139,8 +142,14 @@ export interface ChatCompletionResponse {
 
 export interface ChatCompletionChoice {
   index: number;
-  message: ChatMessage;
+  message: ChatCompletionMessage;
   finish_reason: string;
+}
+
+export interface ChatCompletionMessage {
+  role: string;
+  content: string | null;
+  tool_calls?: ToolCall[];
 }
 
 export interface ChatCompletionUsage {
@@ -151,7 +160,18 @@ export interface ChatCompletionUsage {
 
 export interface ChatCompletionChunkDelta {
   role?: string;
-  content?: string;
+  content?: string | null;
+  tool_calls?: ToolCallChunk[];
+}
+
+export interface ToolCallChunk {
+  index: number;
+  id?: string;
+  type?: 'function';
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
 }
 
 export interface ChatCompletionChunkChoice {
@@ -166,4 +186,104 @@ export interface ChatCompletionChunk {
   created: number;
   model: string;
   choices: ChatCompletionChunkChoice[];
+}
+
+// ==================== Responses API ====================
+
+export interface ResponseInputItem {
+  type: 'message';
+  role: 'user' | 'assistant' | 'system';
+  content: string | ResponseContentItem[];
+}
+
+export interface ResponseContentItem {
+  type: 'input_text' | 'output_text';
+  text: string;
+}
+
+export interface CreateResponseRequest {
+  model: string;
+  input: string | ResponseInputItem[];
+  instructions?: string;
+  stream?: boolean;
+  temperature?: number;
+  max_output_tokens?: number;
+  top_p?: number;
+  store?: boolean;
+  metadata?: Record<string, string>;
+  tools?: FunctionTool[];
+  tool_choice?: 'none' | 'auto' | 'required' | { type: 'function'; name: string };
+  previous_response_id?: string;
+  parallel_tool_calls?: boolean;
+}
+
+export interface ResponseOutputItem {
+  type: 'message';
+  id: string;
+  status: 'completed' | 'in_progress' | 'failed';
+  role: 'assistant';
+  content: ResponseOutputContent[];
+}
+
+export interface ResponseOutputContent {
+  type: 'output_text';
+  text: string;
+  annotations: unknown[];
+}
+
+export interface ResponseObject {
+  id: string;
+  object: 'response';
+  created_at: number;
+  status: 'completed' | 'failed' | 'in_progress' | 'cancelled' | 'queued' | 'incomplete';
+  completed_at: number | null;
+  error: { message: string; type: string; code: string } | null;
+  incomplete_details: { reason: string } | null;
+  instructions: string | null;
+  max_output_tokens: number | null;
+  model: string;
+  output: ResponseOutputItem[];
+  parallel_tool_calls: boolean;
+  previous_response_id: string | null;
+  temperature: number;
+  top_p: number;
+  truncation: 'auto' | 'disabled';
+  usage: {
+    input_tokens: number;
+    input_tokens_details: { cached_tokens: number };
+    output_tokens: number;
+    output_tokens_details: { reasoning_tokens: number };
+    total_tokens: number;
+  } | null;
+  metadata: Record<string, string>;
+}
+
+export interface ResponseStreamEvent {
+  type: string;
+  response?: ResponseObject;
+  delta?: string;
+  item?: ResponseOutputItem;
+}
+
+// ==================== Responses API Tool Calling ====================
+
+export interface ResponseFunctionCallItem {
+  type: 'function_call';
+  id: string;
+  call_id: string;
+  name: string;
+  arguments: string;
+  status: 'completed' | 'in_progress';
+}
+
+export interface ResponseFunctionCallOutputItem {
+  type: 'function_call_output';
+  call_id: string;
+  output: string;
+}
+
+export type ResponseOutputItemUnion = ResponseOutputItem | ResponseFunctionCallItem;
+
+export interface ResponseObjectWithTools extends Omit<ResponseObject, 'output'> {
+  output: ResponseOutputItemUnion[];
 }

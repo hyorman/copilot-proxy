@@ -1,7 +1,7 @@
 {
   "name": "copilot-proxy",
   "displayName": "Copilot Proxy",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "OpenAI compatible proxy for GitHub Copilot",
   "publisher": "PoAI",
   "license": "ISC",
@@ -18,10 +18,7 @@
   "type": "commonjs",
   "main": "./out/extension.js",
   "activationEvents": [
-    "onCommand:copilotProxy.startServer",
-    "onCommand:copilotProxy.stopServer",
-    "onCommand:copilotProxy.listModels",
-    "onCommand:copilotProxy.configurePort"
+    "*"
   ],
   "engines": {
     "vscode": "^1.95.0"
