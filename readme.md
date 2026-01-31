@@ -7,7 +7,7 @@ Copilot Proxy is a Visual Studio Code extension that exposes the VS Code Languag
 [![Watch the video](https://img.youtube.com/vi/i1I2CAPOXHM/maxresdefault.jpg)](https://youtu.be/i1I2CAPOXHM)
 [YouTube Explanation](https://youtu.be/i1I2CAPOXHM)
 
-**Disclaimer:**  
+**Disclaimer:**
 This extension is provided as an experiment only. In the past, some users, i.e., cline users, faced bans due to excessive usage. Since Microsoft introduced rate limits to the VS Code LM, no further bans have been reported. Nevertheless, I do not recommend using this extension for anything beyond research and prototyping.
 
 At the moment, the supported LLMs by GitHub Copilot are: "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "claude-3.5-sonnet", and "o3-mini".
@@ -37,18 +37,52 @@ At the moment, the supported LLMs by GitHub Copilot are: "gpt-4o", "gpt-4o-mini"
 
 The extension provides a configuration setting to specify the port for the Express server:
 
-- **Setting:** `copilotProxy.port`  
+- **Setting:** `copilotProxy.port`
   **Default:** `3000`
 
 You can change this setting in two ways:
 - **Via Settings UI:** Open the VS Code Settings (`Ctrl+,` or `Cmd+,`) and search for "Copilot Proxy".
 - **Via Command Palette:** Run the command **"Copilot Proxy: Configure Port"** to interactively set the port.
 
+### API Token Authentication
+
+The extension provides API token management commands to secure your proxy server. Tokens are securely stored and persist across sessions.
+
+**Managing API Tokens:**
+
+1. **Create a Token:**
+   - Run **"Copilot Proxy: Create API Token"** from the Command Palette
+   - Enter a name for the token (e.g., "aider", "production")
+   - The token will be generated and displayed
+   - Copy the token immediately - you'll need it for client requests
+
+2. **List Tokens:**
+   - Run **"Copilot Proxy: List API Tokens"** to view all created tokens
+   - Token details are shown in the Copilot Proxy Log
+
+3. **Remove a Token:**
+   - Run **"Copilot Proxy: Remove API Token"**
+   - Select the token to remove from the list
+   - Confirm the removal
+
+**Using Tokens in Requests:**
+
+When API tokens exist, all requests to the server must include a valid token in the `Authorization` header:
+
+```bash
+curl -H "Authorization: Bearer cpx_your_token_here" \
+     -H "Content-Type: application/json" \
+     -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}' \
+     http://localhost:3000/v1/chat/completions
+```
+
+**Important:** If no tokens are created, authentication is disabled and the server accepts all requests. Create at least one token to enable authentication.
+
 ## Using the Extension
 
 ### Starting the Server
 
-- Open the Command Palette and run **"Copilot Proxy - Start Server"**.
+- Open the Command Palette and run **"Copilot Proxy: Start Server"**.
 - The server will start on the configured port (default is `3000`), and a notification will confirm the port.
 
 ### Stopping the Server
@@ -102,8 +136,24 @@ The content of the file should look like this:
 - name: aider/extra_params
   extra_params:
     api_key: n/a
-    api_base: http://localhost:3000/v1            
+    api_base: http://localhost:3000/v1
 ```
+
+**Using with API Token Authentication:**
+
+If you have created API tokens (recommended for security), replace `n/a` with your actual token in all `api_key` fields. To create a token, run **"Copilot Proxy: Create API Token"** from the VS Code Command Palette.
+
+Example with authentication:
+
+```yaml
+- name: claude-3-5-sonnet-20241022
+  extra_params:
+    model: openai/claude-3.5-sonnet
+    api_key: cpx_abc123def456...  # Your actual token from Create API Token command
+    api_base: http://localhost:3000/v1
+```
+
+If no tokens are created, authentication is disabled and you can use `n/a` or any value.
 
 
 ## Contributing

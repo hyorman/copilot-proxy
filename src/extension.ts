@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 
 let outputChannel: vscode.OutputChannel;
-import { startServer } from './server';
+import { startServer, setApiTokens, addApiToken as addServerToken, removeApiToken as removeServerToken } from './server';
 import {
   ChatCompletionChunk,
   ChatCompletionRequest,
@@ -19,8 +20,39 @@ interface ModelInfo {
   id?: string;
 }
 
-// State persistence key
+// Token interface
+interface TokenInfo {
+  token: string;
+  name: string;
+  createdAt: number;
+}
+
+// State persistence keys
 const STATE_KEY = 'copilotProxy.assistantsState';
+const TOKENS_KEY = 'copilotProxy.apiTokens';
+
+/**
+ * Generate a secure random API token
+ */
+function generateToken(): string {
+  return 'cpx_' + crypto.randomBytes(32).toString('hex');
+}
+
+/**
+ * Get stored API tokens
+ */
+function getStoredTokens(context: vscode.ExtensionContext): TokenInfo[] {
+  return context.globalState.get<TokenInfo[]>(TOKENS_KEY, []);
+}
+
+/**
+ * Save API tokens to storage
+ */
+function saveTokens(context: vscode.ExtensionContext, tokens: TokenInfo[]) {
+  context.globalState.update(TOKENS_KEY, tokens);
+  // Update server with current tokens
+  setApiTokens(tokens.map(t => t.token));
+}
 
 function configurePort() {
   const config = vscode.workspace.getConfiguration("copilotProxy");
@@ -85,19 +117,14 @@ export function activate(context: vscode.ExtensionContext) {
     );
   }, 1000); // 1 second debounce
 
-  // Auto-start the server on extension activation
-  if (!serverInstance) {
-    const configPort = vscode.workspace.getConfiguration("copilotProxy").get("port", 3000);
-    serverInstance = startServer(configPort);
-    outputChannel.appendLine(`Express server auto-started on port ${configPort}.`);
-  }
-
   // Register command to start the Express server.
   context.subscriptions.push(
     vscode.commands.registerCommand('copilotProxy.startServer', () => {
       if (!serverInstance) {
-        const configPort = vscode.workspace.getConfiguration("copilotProxy").get("port", 3000);
-        serverInstance = startServer(configPort);
+        const config = vscode.workspace.getConfiguration("copilotProxy");
+        const configPort = config.get("port", 3000);
+        const tokens = getStoredTokens(context);
+        serverInstance = startServer(configPort, tokens.map(t => t.token));
         vscode.window.showInformationMessage(`Express server started on port ${configPort}.`);
       } else {
         vscode.window.showInformationMessage('Express server is already running.');
@@ -142,6 +169,118 @@ export function activate(context: vscode.ExtensionContext) {
       } catch (err) {
         outputChannel.appendLine(`Error listing models: ${String(err)}`);
         vscode.window.showErrorMessage('Failed to list models (see Copilot Proxy Log).');
+      }
+    })
+  );
+
+  // ==================== API Token Management Commands ====================
+
+  // Register command to create a new API token
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilotProxy.createApiToken', async () => {
+      const name = await vscode.window.showInputBox({
+        prompt: "Enter a name for this API token (e.g., 'aider', 'production'):",
+        placeHolder: "Token name",
+        validateInput: (value: string): string | undefined => {
+          if (!value || value.trim().length === 0) {
+            return "Token name cannot be empty.";
+          }
+          return undefined;
+        }
+      });
+
+      if (!name) {
+        return;
+      }
+
+      const token = generateToken();
+      const tokens = getStoredTokens(context);
+      tokens.push({
+        token,
+        name: name.trim(),
+        createdAt: Date.now()
+      });
+      saveTokens(context, tokens);
+
+      outputChannel.appendLine(`Created new API token: ${name}`);
+      outputChannel.appendLine(`Token: ${token}`);
+
+      const action = await vscode.window.showInformationMessage(
+        `API token created: ${name}`,
+        'Copy Token',
+        'Show in Log'
+      );
+
+      if (action === 'Copy Token') {
+        await vscode.env.clipboard.writeText(token);
+        vscode.window.showInformationMessage('Token copied to clipboard!');
+      } else if (action === 'Show in Log') {
+        outputChannel.show();
+      }
+    })
+  );
+
+  // Register command to list all API tokens
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilotProxy.listApiTokens', async () => {
+      const tokens = getStoredTokens(context);
+
+      if (tokens.length === 0) {
+        vscode.window.showInformationMessage('No API tokens found. Create one using "Copilot Proxy: Create API Token".');
+        return;
+      }
+
+      outputChannel.appendLine('\n=== API Tokens ===');
+      tokens.forEach((t, idx) => {
+        const created = new Date(t.createdAt).toLocaleString();
+        outputChannel.appendLine(`${idx + 1}. Name: ${t.name}`);
+        outputChannel.appendLine(`   Token: ${t.token}`);
+        outputChannel.appendLine(`   Created: ${created}`);
+        outputChannel.appendLine('');
+      });
+      outputChannel.show();
+
+      vscode.window.showInformationMessage(`Found ${tokens.length} API token(s). Check Copilot Proxy Log for details.`);
+    })
+  );
+
+  // Register command to remove an API token
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilotProxy.removeApiToken', async () => {
+      const tokens = getStoredTokens(context);
+
+      if (tokens.length === 0) {
+        vscode.window.showInformationMessage('No API tokens found.');
+        return;
+      }
+
+      const items = tokens.map((t, idx) => ({
+        label: t.name,
+        description: t.token.substring(0, 16) + '...',
+        detail: `Created: ${new Date(t.createdAt).toLocaleString()}`,
+        token: t.token
+      }));
+
+      const selected = await vscode.window.showQuickPick(items, {
+        placeHolder: 'Select a token to remove',
+        canPickMany: false
+      });
+
+      if (!selected) {
+        return;
+      }
+
+      const confirm = await vscode.window.showWarningMessage(
+        `Are you sure you want to remove token "${selected.label}"?`,
+        { modal: true },
+        'Remove'
+      );
+
+      if (confirm === 'Remove') {
+        const updatedTokens = tokens.filter(t => t.token !== selected.token);
+        saveTokens(context, updatedTokens);
+        outputChannel.appendLine(`Removed API token: ${selected.label}`);
+        vscode.window.showInformationMessage(`Token "${selected.label}" removed successfully.`);
       }
     })
   );

@@ -35,6 +35,71 @@ app.use(express.json());
 // Logger middleware
 app.use(morgan('combined'));
 
+// ==================== Authentication Middleware ====================
+
+let validTokens: Set<string> = new Set();
+
+export function setApiTokens(tokens: string[]) {
+  validTokens = new Set(tokens);
+}
+
+export function addApiToken(token: string) {
+  validTokens.add(token);
+}
+
+export function removeApiToken(token: string) {
+  validTokens.delete(token);
+}
+
+function authMiddleware(req: Request, res: Response, next: Function) {
+  // Skip auth if no tokens configured
+  if (validTokens.size === 0) {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json(
+      errorResponse(
+        'Missing authorization header. Include "Authorization: Bearer <token>" header.',
+        'authentication_error',
+        'authorization',
+        'missing_authorization'
+      )
+    );
+  }
+
+  const parts = authHeader.split(' ');
+  if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    return res.status(401).json(
+      errorResponse(
+        'Invalid authorization header format. Use "Authorization: Bearer <token>".',
+        'authentication_error',
+        'authorization',
+        'invalid_authorization_format'
+      )
+    );
+  }
+
+  const token = parts[1];
+  if (!validTokens.has(token)) {
+    return res.status(401).json(
+      errorResponse(
+        'Invalid API token.',
+        'authentication_error',
+        'authorization',
+        'invalid_token'
+      )
+    );
+  }
+
+  next();
+}
+
+// Apply auth middleware to all routes
+app.use(authMiddleware);
+
 // ==================== Error Helpers ====================
 
 function errorResponse(
@@ -679,7 +744,8 @@ app.use((req: Request, res: Response) => {
   );
 });
 
-export function startServer(port: number = 3000) {
+export function startServer(port: number = 3000, tokens: string[] = []) {
+  setApiTokens(tokens);
   const server = app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
   });

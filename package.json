@@ -17,9 +17,6 @@
   ],
   "type": "commonjs",
   "main": "./out/extension.js",
-  "activationEvents": [
-    "*"
-  ],
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -51,6 +48,18 @@
       {
         "command": "copilotProxy.configurePort",
         "title": "Copilot Proxy: Configure Port"
+      },
+      {
+        "command": "copilotProxy.createApiToken",
+        "title": "Copilot Proxy: Create API Token"
+      },
+      {
+        "command": "copilotProxy.listApiTokens",
+        "title": "Copilot Proxy: List API Tokens"
+      },
+      {
+        "command": "copilotProxy.removeApiToken",
+        "title": "Copilot Proxy: Remove API Token"
       }
     ]
   },
