@@ -1,3 +1,4 @@
 node_modules
 out
 .venv
+.DS_Store
