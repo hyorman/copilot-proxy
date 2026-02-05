@@ -1,117 +1,40 @@
 import express, { Request, Response } from 'express';
-import dotenv from 'dotenv';
 import morgan from 'morgan';
 import {
   ChatCompletionRequest,
   ChatCompletionChunk,
-  ChatCompletionChunkDelta,
   ChatCompletionResponse,
   CompletionRequest,
   CompletionResponse,
   EmbeddingRequest,
   ModelObject,
   ModelsListResponse,
-  OpenAIErrorResponse,
   CreateResponseRequest,
   ResponseObject,
-  ResponseOutputItem,
   ResponseFunctionCallItem,
   ResponseFunctionCallOutputItem,
   ResponseOutputItemUnion,
-  FunctionTool,
-  ToolCall
+  ChatMessage
 } from './types';
 import { processChatRequest, getAvailableModels } from './extension';
 import { assistantsRouter } from './assistants';
-
-// Load environment variables from .env file if present
-dotenv.config();
+import { generateId, errorResponse, setApiTokens, addApiToken, removeApiToken, authMiddleware } from './utils';
 
 const app = express();
 
-// Middleware to parse JSON bodies
-app.use(express.json());
+// Middleware to parse JSON bodies (50MB limit to accommodate large tool results)
+app.use(express.json({ limit: '50mb' }));
 
 // Logger middleware
 app.use(morgan('combined'));
 
-// ==================== Authentication Middleware ====================
-
-let validTokens: Set<string> = new Set();
-
-export function setApiTokens(tokens: string[]) {
-  validTokens = new Set(tokens);
-}
-
-export function addApiToken(token: string) {
-  validTokens.add(token);
-}
-
-export function removeApiToken(token: string) {
-  validTokens.delete(token);
-}
-
-function authMiddleware(req: Request, res: Response, next: Function) {
-  // Skip auth if no tokens configured
-  if (validTokens.size === 0) {
-    return next();
-  }
-
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    return res.status(401).json(
-      errorResponse(
-        'Missing authorization header. Include "Authorization: Bearer <token>" header.',
-        'authentication_error',
-        'authorization',
-        'missing_authorization'
-      )
-    );
-  }
-
-  const parts = authHeader.split(' ');
-  if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    return res.status(401).json(
-      errorResponse(
-        'Invalid authorization header format. Use "Authorization: Bearer <token>".',
-        'authentication_error',
-        'authorization',
-        'invalid_authorization_format'
-      )
-    );
-  }
-
-  const token = parts[1];
-  if (!validTokens.has(token)) {
-    return res.status(401).json(
-      errorResponse(
-        'Invalid API token.',
-        'authentication_error',
-        'authorization',
-        'invalid_token'
-      )
-    );
-  }
-
-  next();
-}
+// Re-export for extension.ts imports
+export { setApiTokens, addApiToken, removeApiToken };
 
 // Apply auth middleware to all routes
 app.use(authMiddleware);
 
-// ==================== Error Helpers ====================
-
-function errorResponse(
-  message: string,
-  type = 'invalid_request_error',
-  param: string | null = null,
-  code: string | null = null
-): OpenAIErrorResponse {
-  return {
-    error: { message, type, param, code }
-  };
-}
+// errorResponse and generateId are imported from ./utils
 
 // ==================== Models Endpoints ====================
 
@@ -201,8 +124,6 @@ app.post<{}, {}, CompletionRequest>('/v1/completions', async (req: Request, res:
 
     try {
       const streamIterator = await processChatRequest(chatRequest) as AsyncIterable<ChatCompletionChunk>;
-      let chunkIndex = 0;
-
       for await (const chunk of streamIterator) {
         // Convert chat chunk to completion chunk format
         const completionChunk = {
@@ -218,13 +139,17 @@ app.post<{}, {}, CompletionRequest>('/v1/completions', async (req: Request, res:
           }]
         };
         res.write(`data: ${JSON.stringify(completionChunk)}\n\n`);
-        chunkIndex++;
       }
       res.write('data: [DONE]\n\n');
       res.end();
     } catch (error) {
       console.error('Streaming completions error:', error);
-      res.status(500).json(errorResponse('Streaming error', 'server_error'));
+      if (!res.headersSent) {
+        res.status(500).json(errorResponse('Streaming error', 'server_error'));
+      } else {
+        res.write(`data: ${JSON.stringify({ error: { message: 'Stream error', type: 'server_error' } })}\n\n`);
+        res.end();
+      }
     }
   } else {
     try {
@@ -255,70 +180,6 @@ app.post<{}, {}, CompletionRequest>('/v1/completions', async (req: Request, res:
 
 // ==================== Responses API Endpoint ====================
 
-// Helper to generate unique IDs
-function generateId(prefix: string): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-}
-
-// Helper to parse tool calls from LLM response
-function parseToolCalls(content: string, tools: FunctionTool[]): { text: string; toolCalls: ResponseFunctionCallItem[] } {
-  const toolCalls: ResponseFunctionCallItem[] = [];
-  let remainingText = content;
-
-  // Look for JSON-formatted tool calls in the response
-  // Common patterns: <tool_call>, ```json, or direct JSON objects
-  const toolCallPatterns = [
-    /<tool_call>([\s\S]*?)<\/tool_call>/g,
-    /```(?:json)?\s*\n?({[\s\S]*?"name"[\s\S]*?"arguments"[\s\S]*?})\s*\n?```/g,
-    /\{\s*"tool_calls?"\s*:\s*\[([\s\S]*?)\]\s*\}/g
-  ];
-
-  for (const pattern of toolCallPatterns) {
-    let match;
-    while ((match = pattern.exec(content)) !== null) {
-      try {
-        let parsed = JSON.parse(match[1] || match[0]);
-
-        // Handle both single tool call and array of tool calls
-        const calls = Array.isArray(parsed) ? parsed : (parsed.tool_calls || [parsed]);
-
-        for (const call of calls) {
-          if (call.name && tools.some(t => t.function.name === call.name)) {
-            const toolCall: ResponseFunctionCallItem = {
-              type: 'function_call',
-              id: generateId('fc'),
-              call_id: generateId('call'),
-              name: call.name,
-              arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments || {}),
-              status: 'completed'
-            };
-            toolCalls.push(toolCall);
-            remainingText = remainingText.replace(match[0], '').trim();
-          }
-        }
-      } catch (e) {
-        // Not valid JSON, continue
-      }
-    }
-  }
-
-  return { text: remainingText, toolCalls };
-}
-
-// Build tool instructions for the system prompt
-function buildToolInstructions(tools: FunctionTool[]): string {
-  if (!tools || tools.length === 0) return '';
-
-  const toolDescriptions = tools.map(tool => {
-    const params = tool.function.parameters
-      ? `\nParameters: ${JSON.stringify(tool.function.parameters, null, 2)}`
-      : '';
-    return `- ${tool.function.name}: ${tool.function.description || 'No description'}${params}`;
-  }).join('\n');
-
-  return `\n\nYou have access to the following tools:\n${toolDescriptions}\n\nTo use a tool, respond with a JSON object in this format:\n\`\`\`json\n{"name": "tool_name", "arguments": {"arg1": "value1"}}\n\`\`\`\n\nYou can make multiple tool calls if needed. After receiving tool results, continue your response.`;
-}
-
 // POST /v1/responses - Create a model response (new OpenAI API)
 app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
   const { model, input, instructions, stream, temperature, max_output_tokens, metadata, tools, tool_choice } = req.body;
@@ -328,21 +189,15 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
     return res.status(400).json(errorResponse('Missing required field: model', 'invalid_request_error', 'model'));
   }
 
-  // Remove vendor prefixes
+  // Remove vendor prefixes (don't mutate req.body)
   const cleanModel = model.split('/').pop()!;
 
   // Convert input to chat messages
-  const messages: { role: string; content: string }[] = [];
-
-  // Build system instructions with tool information
-  let systemInstructions = instructions || '';
-  if (tools && tools.length > 0) {
-    systemInstructions += buildToolInstructions(tools);
-  }
+  const messages: ChatMessage[] = [];
 
   // Add instructions as system message if provided
-  if (systemInstructions) {
-    messages.push({ role: 'system', content: systemInstructions });
+  if (instructions) {
+    messages.push({ role: 'system', content: instructions });
   }
 
   // Process input
@@ -355,8 +210,8 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
           ? item.content
           : item.content.map(c => c.text).join('');
         messages.push({ role: item.role, content });
-      } else if ((item as any).type === 'function_call_output') {
-        // Handle tool output from previous turn
+      } else if ('call_id' in item && 'output' in item) {
+        // Handle tool output from previous turn (function_call_output)
         const toolOutput = item as unknown as ResponseFunctionCallOutputItem;
         messages.push({
           role: 'user',
@@ -366,13 +221,16 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
     }
   }
 
-  // Build chat completion request
+  // Build chat completion request with native tool support
   const chatRequest: ChatCompletionRequest = {
     model: cleanModel,
     messages,
     stream: stream ?? false,
     temperature,
-    max_tokens: max_output_tokens
+    max_tokens: max_output_tokens,
+    tools: tools,
+    // Map 'required' to 'auto' since ChatCompletionRequest doesn't support 'required'
+    tool_choice: (tool_choice === 'required' ? 'auto' : tool_choice) as ChatCompletionRequest['tool_choice'],
   };
 
   const responseId = `resp_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
@@ -412,6 +270,8 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
       const streamIterator = await processChatRequest(chatRequest) as AsyncIterable<ChatCompletionChunk>;
       let fullContent = '';
       const messageId = generateId('msg');
+      const output: ResponseOutputItemUnion[] = [];
+      const toolCalls: ResponseFunctionCallItem[] = [];
 
       for await (const chunk of streamIterator) {
         const deltaContent = chunk.choices[0]?.delta?.content ?? '';
@@ -421,40 +281,30 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
           // Send content delta event
           res.write(`event: response.output_text.delta\ndata: ${JSON.stringify({ delta: deltaContent })}\n\n`);
         }
-      }
 
-      // Parse for tool calls if tools are provided
-      let output: ResponseOutputItemUnion[] = [];
-      let textContent = fullContent;
-
-      if (tools && tools.length > 0) {
-        const { text, toolCalls } = parseToolCalls(fullContent, tools);
-        textContent = text;
-
-        // Send tool call events
-        for (const toolCall of toolCalls) {
-          res.write(`event: response.function_call_arguments.done\ndata: ${JSON.stringify(toolCall)}\n\n`);
-          output.push(toolCall);
+        // Check for native tool calls in the chunk
+        const chunkToolCalls = chunk.choices[0]?.delta?.tool_calls;
+        if (chunkToolCalls) {
+          for (const tc of chunkToolCalls) {
+            if (tc.id && tc.function?.name) {
+              const toolCall: ResponseFunctionCallItem = {
+                type: 'function_call',
+                id: generateId('fc'),
+                call_id: tc.id,
+                name: tc.function.name,
+                arguments: tc.function.arguments ?? '{}',
+                status: 'completed'
+              };
+              toolCalls.push(toolCall);
+              res.write(`event: response.function_call_arguments.done\ndata: ${JSON.stringify(toolCall)}\n\n`);
+              output.push(toolCall);
+            }
+          }
         }
       }
 
-      // Add text message if there's remaining content
-      if (textContent.trim()) {
-        output.push({
-          type: 'message',
-          id: messageId,
-          status: 'completed',
-          role: 'assistant',
-          content: [{
-            type: 'output_text',
-            text: textContent,
-            annotations: []
-          }]
-        });
-      }
-
-      // If only tool calls and no text, still need at least one output
-      if (output.length === 0) {
+      // Add text message if there's content
+      if (fullContent.trim()) {
         output.push({
           type: 'message',
           id: messageId,
@@ -463,6 +313,21 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
           content: [{
             type: 'output_text',
             text: fullContent,
+            annotations: []
+          }]
+        });
+      }
+
+      // If no output at all, add an empty message
+      if (output.length === 0) {
+        output.push({
+          type: 'message',
+          id: messageId,
+          status: 'completed',
+          role: 'assistant',
+          content: [{
+            type: 'output_text',
+            text: '',
             annotations: []
           }]
         });
@@ -501,36 +366,26 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
         : JSON.stringify(chatResponse.choices[0]?.message?.content ?? '');
 
       const messageId = generateId('msg');
+      const output: ResponseOutputItemUnion[] = [];
 
-      // Parse for tool calls if tools are provided
-      let output: ResponseOutputItemUnion[] = [];
-      let textContent = rawContent;
-
-      if (tools && tools.length > 0) {
-        const { text, toolCalls } = parseToolCalls(rawContent, tools);
-        textContent = text;
-
-        // Add tool calls to output
-        output.push(...toolCalls);
+      // Convert native tool calls from processChatRequest to ResponseFunctionCallItem
+      const nativeToolCalls = chatResponse.choices[0]?.message?.tool_calls;
+      if (nativeToolCalls && nativeToolCalls.length > 0) {
+        for (const tc of nativeToolCalls) {
+          const toolCall: ResponseFunctionCallItem = {
+            type: 'function_call',
+            id: generateId('fc'),
+            call_id: tc.id,
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+            status: 'completed'
+          };
+          output.push(toolCall);
+        }
       }
 
-      // Add text message if there's remaining content
-      if (textContent.trim()) {
-        output.push({
-          type: 'message',
-          id: messageId,
-          status: 'completed',
-          role: 'assistant',
-          content: [{
-            type: 'output_text',
-            text: textContent,
-            annotations: []
-          }]
-        });
-      }
-
-      // If only tool calls and no text, still need at least one output
-      if (output.length === 0) {
+      // Add text message if there's content
+      if (rawContent.trim()) {
         output.push({
           type: 'message',
           id: messageId,
@@ -539,6 +394,21 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
           content: [{
             type: 'output_text',
             text: rawContent,
+            annotations: []
+          }]
+        });
+      }
+
+      // If no output at all, add an empty message
+      if (output.length === 0) {
+        output.push({
+          type: 'message',
+          id: messageId,
+          status: 'completed',
+          role: 'assistant',
+          content: [{
+            type: 'output_text',
+            text: '',
             annotations: []
           }]
         });
@@ -582,90 +452,13 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
 
 // ==================== Chat Completions Endpoint ====================
 
-// Helper to parse tool calls for chat completions format
-function parseChatToolCalls(content: string, tools: FunctionTool[]): { text: string; toolCalls: ToolCall[] } {
-  const toolCalls: ToolCall[] = [];
-  let remainingText = content;
-
-  // Look for JSON-formatted tool calls in the response
-  const toolCallPatterns = [
-    /<tool_call>([\s\S]*?)<\/tool_call>/g,
-    /```(?:json)?\s*\n?({[\s\S]*?"name"[\s\S]*?"arguments"[\s\S]*?})\s*\n?```/g,
-    /\{\s*"tool_calls?"\s*:\s*\[([\s\S]*?)\]\s*\}/g
-  ];
-
-  for (const pattern of toolCallPatterns) {
-    let match;
-    while ((match = pattern.exec(content)) !== null) {
-      try {
-        let parsed = JSON.parse(match[1] || match[0]);
-        const calls = Array.isArray(parsed) ? parsed : (parsed.tool_calls || [parsed]);
-
-        for (const call of calls) {
-          if (call.name && tools.some(t => t.function.name === call.name)) {
-            const toolCall: ToolCall = {
-              id: generateId('call'),
-              type: 'function',
-              function: {
-                name: call.name,
-                arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments || {})
-              }
-            };
-            toolCalls.push(toolCall);
-            remainingText = remainingText.replace(match[0], '').trim();
-          }
-        }
-      } catch (e) {
-        // Not valid JSON, continue
-      }
-    }
-  }
-
-  return { text: remainingText, toolCalls };
-}
-
 app.post<{}, {}, ChatCompletionRequest>('/v1/chat/completions', async (req, res) => {
   const { model, stream, tools, tool_choice } = req.body;
 
-// Remove vendor prefixes so that only the actual model name is used.
+  // Remove vendor prefixes so that only the actual model name is used.
   // For instance, "openrouter/anthropic/claude-3.5-sonnet" becomes "claude-3.5-sonnet".
-  req.body.model = model.split('/').pop()!;
-
-  // If tools are provided, inject tool instructions into the messages
-  if (tools && tools.length > 0) {
-    const toolInstructions = buildToolInstructions(tools);
-
-    // Find or create system message
-    const systemMsgIndex = req.body.messages.findIndex(m => m.role === 'system');
-    if (systemMsgIndex >= 0) {
-      const existingContent = req.body.messages[systemMsgIndex].content;
-      req.body.messages[systemMsgIndex].content =
-        (typeof existingContent === 'string' ? existingContent : '') + toolInstructions;
-    } else {
-      req.body.messages.unshift({ role: 'system', content: toolInstructions.trim() });
-    }
-
-    // Convert tool role messages to user messages with context
-    req.body.messages = req.body.messages.map(msg => {
-      if (msg.role === 'tool' && msg.tool_call_id) {
-        return {
-          role: 'user',
-          content: `Tool result for ${msg.tool_call_id}:\n${msg.content}`
-        };
-      }
-      // Convert assistant messages with tool_calls to include the call info
-      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
-        const toolCallsText = msg.tool_calls.map(tc =>
-          `Called ${tc.function.name} with arguments: ${tc.function.arguments}`
-        ).join('\n');
-        return {
-          role: 'assistant',
-          content: (msg.content || '') + '\n' + toolCallsText
-        };
-      }
-      return msg;
-    });
-  }
+  const cleanModel = model.split('/').pop()!;
+  req.body.model = cleanModel;
 
   if (stream) {
     // Set headers for streaming.
@@ -674,42 +467,31 @@ app.post<{}, {}, ChatCompletionRequest>('/v1/chat/completions', async (req, res)
     res.setHeader('Connection', 'keep-alive');
 
     try {
-      // Call processChatRequest and expect an async iterator for streaming.
+      // Call processChatRequest — tools are passed natively through the request
+      // and tool calls come back as proper delta.tool_calls chunks
       const streamIterator = await processChatRequest(req.body) as AsyncIterable<ChatCompletionChunk>;
+
       for await (const chunk of streamIterator) {
+        // Forward the chunk directly to the client (tool calls are already in the chunk)
         res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-        console.log(`Sent chunk with content: ${chunk.choices[0].delta.content}`);
       }
+
       res.write("data: [DONE]\n\n");
       res.end();
     } catch (error) {
       console.error("Streaming error:", error);
-      return res.status(500).json(errorResponse('Streaming error', 'server_error'));
+      if (!res.headersSent) {
+        return res.status(500).json(errorResponse('Streaming error', 'server_error'));
+      } else {
+        res.write(`data: ${JSON.stringify({ error: { message: 'Stream error', type: 'server_error' } })}\n\n`);
+        res.end();
+      }
     }
   } else {
     try {
       // For non-streaming, await a full response.
+      // Tools are handled natively — tool_calls and finish_reason are already set by processChatRequest
       const fullResponse = await processChatRequest(req.body) as ChatCompletionResponse;
-
-      // If tools were provided, check for tool calls in the response
-      if (tools && tools.length > 0 && fullResponse.choices[0]?.message?.content) {
-        const content = typeof fullResponse.choices[0].message.content === 'string'
-          ? fullResponse.choices[0].message.content
-          : JSON.stringify(fullResponse.choices[0].message.content);
-
-        const { text, toolCalls } = parseChatToolCalls(content, tools);
-
-        if (toolCalls.length > 0) {
-          // Return response with tool_calls
-          fullResponse.choices[0].message = {
-            role: 'assistant',
-            content: text.trim() || null,
-            tool_calls: toolCalls
-          };
-          fullResponse.choices[0].finish_reason = 'tool_calls';
-        }
-      }
-
       return res.json(fullResponse);
     } catch (error) {
       console.error("Non-streaming error:", error);

@@ -1,13 +1,13 @@
 /**
  * Run Execution Engine
- * 
+ *
  * Executes runs with support for:
  * - Streaming mode (yields SSE events)
  * - Non-streaming mode (returns promise)
  * - Run steps tracking
  * - Cancellation support
  * - Tool calling (prompt-based)
- * 
+ *
  * The executeRun function is a generator that yields StreamEvent objects.
  * For non-streaming, consume all events and ignore them.
  * For streaming, pipe events to SSE response.
@@ -15,7 +15,9 @@
 
 import { state, PendingToolContext } from './state';
 import { processChatRequest } from '../extension';
-import { ChatCompletionRequest, ChatCompletionChunk, ChatMessage } from '../types';
+import { ChatCompletionRequest, ChatCompletionChunk, ChatCompletionResponse, ChatMessage } from '../types';
+import { createMessage } from '../utils';
+import { assistantToolsToFunctionTools } from '../toolConvert';
 import {
   Run,
   Message,
@@ -26,15 +28,7 @@ import {
   MessageDelta,
   ToolCall,
   ToolOutput,
-  ToolCallsStepDetails
 } from './types';
-import {
-  formatToolsForPrompt,
-  formatToolResultsForPrompt,
-  parseToolCalls,
-  createToolCallObjects,
-  validateToolCalls
-} from './tools';
 
 // Active runs that can be cancelled
 const activeRuns = new Map<string, { cancelled: boolean }>();
@@ -59,7 +53,7 @@ function createEvent(event: StreamEvent['event'], data: unknown): StreamEvent {
 /**
  * Execute a run as an async generator
  * Yields StreamEvent objects for SSE streaming
- * 
+ *
  * @param threadId - The thread ID
  * @param runId - The run ID
  * @param streaming - Whether to yield intermediate events
@@ -75,7 +69,7 @@ export async function* executeRun(
   try {
     const run = state.getRun(threadId, runId);
     const thread = state.getThread(threadId);
-    
+
     if (!run || !thread) {
       state.updateRun(threadId, runId, {
         status: 'failed',
@@ -135,7 +129,8 @@ export async function* executeRun(
     const threadMessages = state.getMessages(threadId, { order: 'asc' });
     const chatMessages: ChatMessage[] = [];
 
-    // Build system instructions (assistant instructions + run overrides + tools)
+    // Build system instructions (assistant instructions + run overrides)
+    // Tools are passed natively via processChatRequest, not injected into system prompt
     let systemContent = '';
     if (assistant.instructions) {
       systemContent += assistant.instructions;
@@ -144,19 +139,17 @@ export async function* executeRun(
       systemContent += (systemContent ? '\n\n' : '') + run.instructions;
     }
 
-    // Add tool definitions if tools are available
+    // Get tools for native passing
     const tools = run.tools.length > 0 ? run.tools : assistant.tools;
-    if (tools.length > 0) {
-      systemContent += formatToolsForPrompt(tools);
-    }
+    const functionTools = assistantToolsToFunctionTools(tools);
 
     // Convert thread messages to chat messages
     // Prepend system content to the first user message
     let systemPrepended = false;
-    
+
     for (const msg of threadMessages.data) {
       const textContent = extractTextFromContent(msg.content);
-      
+
       if (msg.role === 'user' && !systemPrepended && systemContent) {
         // Prepend system instructions to first user message
         chatMessages.push({
@@ -196,7 +189,7 @@ export async function* executeRun(
     // Create message_creation run step
     const stepId = state.generateStepId();
     const messageId = state.generateMessageId();
-    
+
     const runStep: RunStep = {
       id: stepId,
       object: 'thread.run.step',
@@ -227,11 +220,12 @@ export async function* executeRun(
       yield createEvent('thread.run.step.in_progress', runStep);
     }
 
-    // Build request - use streaming mode if requested
+    // Build request - use streaming mode if requested, pass tools natively
     const request: ChatCompletionRequest = {
       model: run.model || assistant.model,
       messages: chatMessages,
-      stream: streaming
+      stream: streaming,
+      ...(functionTools.length > 0 ? { tools: functionTools } : {}),
     };
 
     let fullContent = '';
@@ -241,36 +235,25 @@ export async function* executeRun(
     if (streaming) {
       // Streaming mode: yield message deltas
       const streamIterator = await processChatRequest(request) as AsyncIterable<ChatCompletionChunk>;
-      
+
       // Create message in progress
-      const assistantMessage: Message = {
-        id: messageId,
-        object: 'thread.message',
-        created_at: Math.floor(Date.now() / 1000),
-        thread_id: threadId,
-        status: 'in_progress',
-        incomplete_details: null,
-        completed_at: null,
-        incomplete_at: null,
+      const assistantMessage = createMessage({
+        threadId,
+        messageId,
+        content: '',
         role: 'assistant',
-        content: [{
-          type: 'text',
-          text: {
-            value: '',
-            annotations: []
-          }
-        }],
-        assistant_id: assistant.id,
-        run_id: runId,
-        attachments: [],
-        metadata: {}
-      };
+        assistantId: assistant.id,
+        runId,
+        status: 'in_progress',
+      });
 
       state.addMessage(threadId, assistantMessage);
       yield createEvent('thread.message.created', assistantMessage);
       yield createEvent('thread.message.in_progress', assistantMessage);
 
       let deltaIndex = 0;
+      const accumulatedToolCalls: ToolCall[] = [];
+
       for await (const chunk of streamIterator) {
         // Check for cancellation
         if (activeRuns.get(runKey)?.cancelled) {
@@ -291,7 +274,7 @@ export async function* executeRun(
         const content = chunk.choices[0]?.delta?.content ?? '';
         if (content) {
           fullContent += content;
-          
+
           // Emit message delta
           const delta: MessageDelta = {
             id: messageId,
@@ -310,8 +293,25 @@ export async function* executeRun(
           deltaIndex++;
         }
 
+        // Check for native tool calls in delta
+        const chunkToolCalls = chunk.choices[0]?.delta?.tool_calls;
+        if (chunkToolCalls) {
+          for (const tc of chunkToolCalls) {
+            if (tc.id && tc.function?.name) {
+              accumulatedToolCalls.push({
+                id: tc.id,
+                type: 'function',
+                function: {
+                  name: tc.function.name,
+                  arguments: tc.function.arguments ?? '{}',
+                },
+              });
+            }
+          }
+        }
+
         // Check for finish reason
-        if (chunk.choices[0]?.finish_reason === 'stop') {
+        if (chunk.choices[0]?.finish_reason === 'stop' || chunk.choices[0]?.finish_reason === 'tool_calls') {
           break;
         }
       }
@@ -335,9 +335,68 @@ export async function* executeRun(
 
       yield createEvent('thread.message.completed', state.getMessage(threadId, messageId));
 
+      // Handle tool calls detected during streaming
+      if (accumulatedToolCalls.length > 0) {
+        // Complete the message_creation step
+        state.updateRunStep(runId, stepId, {
+          status: 'completed',
+          completed_at: Math.floor(Date.now() / 1000)
+        });
+
+        // Create tool_calls run step
+        const toolStepId = state.generateStepId();
+        const toolStep: RunStep = {
+          id: toolStepId,
+          object: 'thread.run.step',
+          created_at: Math.floor(Date.now() / 1000),
+          run_id: runId,
+          assistant_id: assistant.id,
+          thread_id: threadId,
+          type: 'tool_calls',
+          status: 'in_progress',
+          cancelled_at: null,
+          completed_at: null,
+          expired_at: null,
+          failed_at: null,
+          last_error: null,
+          step_details: {
+            type: 'tool_calls',
+            tool_calls: accumulatedToolCalls
+          },
+          usage: null
+        };
+        state.addRunStep(runId, toolStep);
+
+        // Save context for when tool outputs are submitted
+        const pendingContext: PendingToolContext = {
+          runId,
+          threadId,
+          toolCalls: accumulatedToolCalls,
+          partialContent: fullContent,
+          stepId: toolStepId
+        };
+        state.setPendingToolContext(runId, pendingContext);
+
+        // Update run to requires_action
+        state.updateRun(threadId, runId, {
+          status: 'requires_action',
+          required_action: {
+            type: 'submit_tool_outputs',
+            submit_tool_outputs: {
+              tool_calls: accumulatedToolCalls
+            }
+          }
+        });
+
+        yield createEvent('thread.run.step.created', toolStep);
+        yield createEvent('thread.run.requires_action', state.getRun(threadId, runId));
+        yield createEvent('done', '[DONE]');
+        return;
+      }
+
     } else {
       // Non-streaming mode
-      const response = await processChatRequest(request) as any;
+      const response = await processChatRequest(request) as ChatCompletionResponse;
 
       // Check for cancellation after LLM response
       if (activeRuns.get(runKey)?.cancelled) {
@@ -368,113 +427,80 @@ export async function* executeRun(
         return;
       }
 
-      fullContent = typeof responseContent === 'string' 
-        ? responseContent 
+      fullContent = typeof responseContent === 'string'
+        ? responseContent
         : JSON.stringify(responseContent);
 
       promptTokens = response.usage?.prompt_tokens ?? 0;
       completionTokens = response.usage?.completion_tokens ?? fullContent.length;
 
-      // Check for tool calls in the response
-      const availableTools = run.tools.length > 0 ? run.tools : assistant.tools;
-      if (availableTools.length > 0) {
-        const { toolCalls: parsedCalls, textContent, hasToolCalls } = parseToolCalls(fullContent);
-        
-        if (hasToolCalls) {
-          // Validate tool calls against available tools
-          const { valid: validCalls, invalid: invalidNames } = validateToolCalls(parsedCalls, availableTools);
-          
-          if (invalidNames.length > 0) {
-            console.warn('Model called unknown tools:', invalidNames);
+      // Check for native tool calls in the response
+      const responseToolCalls = response.choices?.[0]?.message?.tool_calls;
+      if (responseToolCalls && responseToolCalls.length > 0) {
+        // Complete the message_creation step (with partial content if any)
+        state.updateRunStep(runId, stepId, {
+          status: 'completed',
+          completed_at: Math.floor(Date.now() / 1000)
+        });
+
+        // Create tool_calls run step
+        const toolStepId = state.generateStepId();
+        const toolStep: RunStep = {
+          id: toolStepId,
+          object: 'thread.run.step',
+          created_at: Math.floor(Date.now() / 1000),
+          run_id: runId,
+          assistant_id: assistant.id,
+          thread_id: threadId,
+          type: 'tool_calls',
+          status: 'in_progress',
+          cancelled_at: null,
+          completed_at: null,
+          expired_at: null,
+          failed_at: null,
+          last_error: null,
+          step_details: {
+            type: 'tool_calls',
+            tool_calls: responseToolCalls
+          },
+          usage: null
+        };
+        state.addRunStep(runId, toolStep);
+
+        // Save context for when tool outputs are submitted
+        const pendingContext: PendingToolContext = {
+          runId,
+          threadId,
+          toolCalls: responseToolCalls,
+          partialContent: fullContent,
+          stepId: toolStepId
+        };
+        state.setPendingToolContext(runId, pendingContext);
+
+        // Update run to requires_action
+        state.updateRun(threadId, runId, {
+          status: 'requires_action',
+          required_action: {
+            type: 'submit_tool_outputs',
+            submit_tool_outputs: {
+              tool_calls: responseToolCalls
+            }
           }
+        });
 
-          if (validCalls.length > 0) {
-            // Convert to ToolCall objects with IDs
-            const toolCallObjects = createToolCallObjects(validCalls);
-
-            // Complete the message_creation step (with partial content if any)
-            state.updateRunStep(runId, stepId, {
-              status: 'completed',
-              completed_at: Math.floor(Date.now() / 1000)
-            });
-
-            // Create tool_calls run step
-            const toolStepId = state.generateStepId();
-            const toolStep: RunStep = {
-              id: toolStepId,
-              object: 'thread.run.step',
-              created_at: Math.floor(Date.now() / 1000),
-              run_id: runId,
-              assistant_id: assistant.id,
-              thread_id: threadId,
-              type: 'tool_calls',
-              status: 'in_progress',
-              cancelled_at: null,
-              completed_at: null,
-              expired_at: null,
-              failed_at: null,
-              last_error: null,
-              step_details: {
-                type: 'tool_calls',
-                tool_calls: toolCallObjects
-              },
-              usage: null
-            };
-            state.addRunStep(runId, toolStep);
-
-            // Save context for when tool outputs are submitted
-            const pendingContext: PendingToolContext = {
-              runId,
-              threadId,
-              toolCalls: toolCallObjects,
-              partialContent: textContent,
-              stepId: toolStepId
-            };
-            state.setPendingToolContext(runId, pendingContext);
-
-            // Update run to requires_action
-            state.updateRun(threadId, runId, {
-              status: 'requires_action',
-              required_action: {
-                type: 'submit_tool_outputs',
-                submit_tool_outputs: {
-                  tool_calls: toolCallObjects
-                }
-              }
-            });
-
-            // Don't create message yet - wait for tool outputs
-            return;
-          }
-        }
-
-        // No valid tool calls, use the text content (stripped of any invalid tool call markers)
-        fullContent = textContent || fullContent;
+        // Don't create message yet - wait for tool outputs
+        return;
       }
 
       // Create assistant message
-      const assistantMessage: Message = {
-        id: messageId,
-        object: 'thread.message',
-        created_at: Math.floor(Date.now() / 1000),
-        thread_id: threadId,
-        status: 'completed',
-        incomplete_details: null,
-        completed_at: Math.floor(Date.now() / 1000),
-        incomplete_at: null,
+      const assistantMessage = createMessage({
+        threadId,
+        messageId,
+        content: fullContent,
         role: 'assistant',
-        content: [{
-          type: 'text',
-          text: {
-            value: fullContent,
-            annotations: []
-          }
-        }],
-        assistant_id: assistant.id,
-        run_id: runId,
-        attachments: [],
-        metadata: {}
-      };
+        assistantId: assistant.id,
+        runId,
+      });
 
       state.addMessage(threadId, assistantMessage);
     }
@@ -643,17 +669,15 @@ export async function* continueRunWithToolOutputs(
       systemContent += (systemContent ? '\n\n' : '') + run.instructions;
     }
 
-    // Add tool definitions
+    // Get tools for native passing
     const tools = run.tools.length > 0 ? run.tools : assistant.tools;
-    if (tools.length > 0) {
-      systemContent += formatToolsForPrompt(tools);
-    }
+    const functionTools = assistantToolsToFunctionTools(tools);
 
     // Convert thread messages to chat messages
     let systemPrepended = false;
     for (const msg of threadMessages.data) {
       const textContent = extractTextFromContent(msg.content);
-      
+
       if (msg.role === 'user' && !systemPrepended && systemContent) {
         chatMessages.push({
           role: 'user',
@@ -676,20 +700,27 @@ export async function* continueRunWithToolOutputs(
       });
     }
 
-    // Add the partial content from before tool calls (as assistant message)
-    if (pendingContext.partialContent) {
+    // Add the assistant message with tool calls (as native tool call parts)
+    if (pendingContext.toolCalls.length > 0) {
+      if (pendingContext.partialContent) {
+        // Include partial content with the tool call assistant message
+      }
+      // Add assistant message with tool_calls for the conversation history
       chatMessages.push({
         role: 'assistant',
-        content: pendingContext.partialContent
+        content: pendingContext.partialContent || null,
+        tool_calls: pendingContext.toolCalls,
       });
     }
 
-    // Add tool results as a user message
-    const toolResultsPrompt = formatToolResultsForPrompt(pendingContext.toolCalls, toolOutputs);
-    chatMessages.push({
-      role: 'user',
-      content: toolResultsPrompt
-    });
+    // Add tool results as individual tool messages
+    for (const output of toolOutputs) {
+      chatMessages.push({
+        role: 'tool',
+        tool_call_id: output.tool_call_id,
+        content: output.output,
+      });
+    }
 
     // Clear pending context
     state.deletePendingToolContext(runId);
@@ -728,19 +759,20 @@ export async function* continueRunWithToolOutputs(
       yield createEvent('thread.run.step.in_progress', runStep);
     }
 
-    // Build request
+    // Build request with native tool support
     const request: ChatCompletionRequest = {
       model: run.model || assistant.model,
       messages: chatMessages,
-      stream: streaming
+      stream: streaming,
+      ...(functionTools.length > 0 ? { tools: functionTools } : {}),
     };
 
     let fullContent = '';
     let promptTokens = 0;
     let completionTokens = 0;
 
-    // Non-streaming continuation (for now - streaming follows same pattern as executeRun)
-    const response = await processChatRequest(request) as any;
+    // Non-streaming continuation
+    const response = await processChatRequest(request) as ChatCompletionResponse;
 
     const responseContent = response.choices[0]?.message?.content;
     if (!responseContent) {
@@ -752,109 +784,84 @@ export async function* continueRunWithToolOutputs(
       return;
     }
 
-    fullContent = typeof responseContent === 'string' 
-      ? responseContent 
+    fullContent = typeof responseContent === 'string'
+      ? responseContent
       : JSON.stringify(responseContent);
 
     promptTokens = response.usage?.prompt_tokens ?? 0;
     completionTokens = response.usage?.completion_tokens ?? fullContent.length;
 
-    // Check for more tool calls (recursive)
-    if (tools.length > 0) {
-      const { toolCalls: parsedCalls, textContent, hasToolCalls } = parseToolCalls(fullContent);
-      
-      if (hasToolCalls) {
-        const { valid: validCalls } = validateToolCalls(parsedCalls, tools);
+    // Check for more tool calls (native)
+    const responseToolCalls = response.choices?.[0]?.message?.tool_calls;
+    if (responseToolCalls && responseToolCalls.length > 0) {
+      // Complete the message_creation step
+      state.updateRunStep(runId, stepId, {
+        status: 'completed',
+        completed_at: Math.floor(Date.now() / 1000)
+      });
 
-        if (validCalls.length > 0) {
-          const toolCallObjects = createToolCallObjects(validCalls);
+      // Create new tool_calls step
+      const toolStepId = state.generateStepId();
+      const toolStep: RunStep = {
+        id: toolStepId,
+        object: 'thread.run.step',
+        created_at: Math.floor(Date.now() / 1000),
+        run_id: runId,
+        assistant_id: assistant.id,
+        thread_id: threadId,
+        type: 'tool_calls',
+        status: 'in_progress',
+        cancelled_at: null,
+        completed_at: null,
+        expired_at: null,
+        failed_at: null,
+        last_error: null,
+        step_details: {
+          type: 'tool_calls',
+          tool_calls: responseToolCalls
+        },
+        usage: null
+      };
+      state.addRunStep(runId, toolStep);
 
-          // Complete the message_creation step
-          state.updateRunStep(runId, stepId, {
-            status: 'completed',
-            completed_at: Math.floor(Date.now() / 1000)
-          });
+      // Save context for next round
+      const newPendingContext: PendingToolContext = {
+        runId,
+        threadId,
+        toolCalls: responseToolCalls,
+        partialContent: fullContent,
+        stepId: toolStepId
+      };
+      state.setPendingToolContext(runId, newPendingContext);
 
-          // Create new tool_calls step
-          const toolStepId = state.generateStepId();
-          const toolStep: RunStep = {
-            id: toolStepId,
-            object: 'thread.run.step',
-            created_at: Math.floor(Date.now() / 1000),
-            run_id: runId,
-            assistant_id: assistant.id,
-            thread_id: threadId,
-            type: 'tool_calls',
-            status: 'in_progress',
-            cancelled_at: null,
-            completed_at: null,
-            expired_at: null,
-            failed_at: null,
-            last_error: null,
-            step_details: {
-              type: 'tool_calls',
-              tool_calls: toolCallObjects
-            },
-            usage: null
-          };
-          state.addRunStep(runId, toolStep);
-
-          // Save context for next round
-          const newPendingContext: PendingToolContext = {
-            runId,
-            threadId,
-            toolCalls: toolCallObjects,
-            partialContent: textContent,
-            stepId: toolStepId
-          };
-          state.setPendingToolContext(runId, newPendingContext);
-
-          // Update run to requires_action again
-          state.updateRun(threadId, runId, {
-            status: 'requires_action',
-            required_action: {
-              type: 'submit_tool_outputs',
-              submit_tool_outputs: {
-                tool_calls: toolCallObjects
-              }
-            }
-          });
-
-          if (streaming) {
-            yield createEvent('thread.run.step.created', toolStep);
-            yield createEvent('thread.run.requires_action', state.getRun(threadId, runId));
-            yield createEvent('done', '[DONE]');
+      // Update run to requires_action again
+      state.updateRun(threadId, runId, {
+        status: 'requires_action',
+        required_action: {
+          type: 'submit_tool_outputs',
+          submit_tool_outputs: {
+            tool_calls: responseToolCalls
           }
-          return;
         }
-      }
+      });
 
-      fullContent = textContent || fullContent;
+      if (streaming) {
+        yield createEvent('thread.run.step.created', toolStep);
+        yield createEvent('thread.run.requires_action', state.getRun(threadId, runId));
+        yield createEvent('done', '[DONE]');
+      }
+      return;
     }
 
     // Create assistant message
-    const assistantMessage: Message = {
-      id: messageId,
-      object: 'thread.message',
-      created_at: Math.floor(Date.now() / 1000),
-      thread_id: threadId,
-      status: 'completed',
-      incomplete_details: null,
-      completed_at: Math.floor(Date.now() / 1000),
-      incomplete_at: null,
+    const assistantMessage = createMessage({
+      threadId,
+      messageId,
+      content: fullContent,
       role: 'assistant',
-      content: [{
-        type: 'text',
-        text: {
-          value: fullContent,
-          annotations: []
-        }
-      }],
-      assistant_id: assistant.id,
-      run_id: runId,
-      attachments: [],
-      metadata: {}
-    };
+      assistantId: assistant.id,
+      runId,
+    });
 
     state.addMessage(threadId, assistantMessage);
 

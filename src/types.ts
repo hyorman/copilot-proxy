@@ -4,7 +4,7 @@ export interface StructuredMessageContent {
 }
 
 export interface ChatMessage {
-  role: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | StructuredMessageContent[] | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
@@ -91,22 +91,6 @@ export interface EmbeddingRequest {
   user?: string;
 }
 
-export interface EmbeddingResponse {
-  object: 'list';
-  data: EmbeddingData[];
-  model: string;
-  usage: {
-    prompt_tokens: number;
-    total_tokens: number;
-  };
-}
-
-export interface EmbeddingData {
-  object: 'embedding';
-  index: number;
-  embedding: number[];
-}
-
 // ==================== Models API ====================
 
 export interface ModelObject {
@@ -134,7 +118,7 @@ export interface OpenAIErrorResponse {
 
 export interface ChatCompletionResponse {
   id: string;
-  object: string;
+  object: 'chat.completion';
   created: number;
   choices: ChatCompletionChoice[];
   usage: ChatCompletionUsage;
@@ -143,11 +127,11 @@ export interface ChatCompletionResponse {
 export interface ChatCompletionChoice {
   index: number;
   message: ChatCompletionMessage;
-  finish_reason: string;
+  finish_reason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null;
 }
 
 export interface ChatCompletionMessage {
-  role: string;
+  role: 'assistant';
   content: string | null;
   tool_calls?: ToolCall[];
 }
@@ -177,7 +161,7 @@ export interface ToolCallChunk {
 export interface ChatCompletionChunkChoice {
   delta: ChatCompletionChunkDelta;
   index: number;
-  finish_reason: string;
+  finish_reason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | '' | null;
 }
 
 export interface ChatCompletionChunk {
@@ -258,13 +242,6 @@ export interface ResponseObject {
   metadata: Record<string, string>;
 }
 
-export interface ResponseStreamEvent {
-  type: string;
-  response?: ResponseObject;
-  delta?: string;
-  item?: ResponseOutputItem;
-}
-
 // ==================== Responses API Tool Calling ====================
 
 export interface ResponseFunctionCallItem {
@@ -283,7 +260,3 @@ export interface ResponseFunctionCallOutputItem {
 }
 
 export type ResponseOutputItemUnion = ResponseOutputItem | ResponseFunctionCallItem;
-
-export interface ResponseObjectWithTools extends Omit<ResponseObject, 'output'> {
-  output: ResponseOutputItemUnion[];
-}

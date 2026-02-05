@@ -100,22 +100,30 @@ form.addEventListener('submit', async (e)=>{
   const prompt = promptEl.value.trim();
   if(!prompt) return;
 
+  // Disable form during request
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if(submitBtn) submitBtn.disabled = true;
+  promptEl.disabled = true;
+
   // add user message to conversation
   messages.push({role:'user', content: prompt});
   saveMessages();
   renderMessages();
   promptEl.value = '';
 
-  // add temporary assistant placeholder
+  // add temporary assistant placeholder (only for display, not sent to API)
   messages.push({role:'assistant', content: '...'});
   saveMessages();
   renderMessages();
+
+  // Build messages to send (exclude the placeholder)
+  const messagesToSend = messages.slice(0, -1);
 
   try{
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ model: modelSel.value, messages })
+      body: JSON.stringify({ model: modelSel.value, messages: messagesToSend })
     });
     if(!resp.ok){
       const txt = await resp.text();
@@ -146,5 +154,10 @@ form.addEventListener('submit', async (e)=>{
     saveMessages();
     renderMessages();
     console.error(err);
+  }finally{
+    // Re-enable form
+    if(submitBtn) submitBtn.disabled = false;
+    promptEl.disabled = false;
+    promptEl.focus();
   }
 });

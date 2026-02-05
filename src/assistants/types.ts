@@ -1,17 +1,22 @@
 /**
  * OpenAI Assistants API Types
- * 
+ *
  * Full stateful implementation supporting:
  * - Assistants (create, get, list, update, delete)
  * - Threads (create, get, delete)
  * - Messages (create, get, list)
  * - Runs (create, get, list, cancel)
- * 
+ *
  * Future extensibility:
  * - Tool calling (code_interpreter, file_search, function)
  * - Streaming runs (SSE)
  * - Run steps
  */
+
+import { ToolCall } from '../types';
+
+// Re-export ToolCall so consumers don't need to change imports
+export { ToolCall };
 
 // ==================== Common Types ====================
 
@@ -21,12 +26,6 @@ export interface OpenAIListResponse<T> {
   first_id: string | null;
   last_id: string | null;
   has_more: boolean;
-}
-
-export interface OpenAIDeleteResponse {
-  id: string;
-  object: string;
-  deleted: boolean;
 }
 
 export interface PaginationParams {
@@ -52,25 +51,9 @@ export interface AssistantTool {
   function?: FunctionDefinition;
 }
 
-// Tool call support
-export interface ToolCall {
-  id: string;
-  type: 'function';
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
 export interface ToolOutput {
   tool_call_id: string;
   output: string;
-}
-
-// Parsed tool call from model output
-export interface ParsedToolCall {
-  name: string;
-  arguments: Record<string, unknown>;
 }
 
 // ==================== Assistant Types ====================
@@ -201,7 +184,7 @@ export interface CreateMessageRequest {
 
 // ==================== Run Types ====================
 
-export type RunStatus = 
+export type RunStatus =
   | 'queued'
   | 'in_progress'
   | 'requires_action'    // Future: tool calling
@@ -285,15 +268,7 @@ export interface SubmitToolOutputsRequest {
   stream?: boolean;
 }
 
-// Pending tool calls stored in run context
-export interface PendingToolCalls {
-  runId: string;
-  threadId: string;
-  toolCalls: ToolCall[];
-  partialContent: string; // Any text before tool calls
-}
-
-// ==================== Run Steps (Future) ====================
+// ==================== Run Steps ====================
 
 export type RunStepType = 'message_creation' | 'tool_calls';
 export type RunStepStatus = 'in_progress' | 'cancelled' | 'failed' | 'completed' | 'expired';

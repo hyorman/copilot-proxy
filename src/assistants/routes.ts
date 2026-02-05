@@ -1,12 +1,12 @@
 /**
  * Express Routes for OpenAI Assistants API
- * 
+ *
  * Implements all CRUD operations for:
  * - /v1/assistants
  * - /v1/threads
  * - /v1/threads/:thread_id/messages
  * - /v1/threads/:thread_id/runs
- * 
+ *
  * Future extensibility:
  * - /v1/threads/runs (create thread and run)
  * - /v1/threads/:thread_id/runs/:run_id/steps
@@ -28,40 +28,13 @@ import {
   CreateRunRequest,
   CreateThreadAndRunRequest,
   SubmitToolOutputsRequest,
-  TextContent,
   PaginationParams,
-  StreamEvent
 } from './types';
+import { errorResponse, notFoundError, createMessage } from '../utils';
 
 const router = Router();
 
-// ==================== Error Helpers ====================
-
-interface OpenAIError {
-  error: {
-    message: string;
-    type: string;
-    param: string | null;
-    code: string | null;
-  };
-}
-
-function errorResponse(message: string, type = 'invalid_request_error', param: string | null = null, code: string | null = null): OpenAIError {
-  return {
-    error: {
-      message,
-      type,
-      param,
-      code
-    }
-  };
-}
-
-function notFoundError(resource: string): OpenAIError {
-  return errorResponse(`No ${resource} found`, 'invalid_request_error', null, 'resource_not_found');
-}
-
-// ==================== Validation Helpers ====================
+// ==================== Validation Helpers ======================================
 
 function validateRequired<T extends object>(body: T, fields: (keyof T)[]): string | null {
   for (const field of fields) {
@@ -86,7 +59,7 @@ function parsePaginationParams(query: Request['query']): PaginationParams {
 // Create assistant
 router.post('/v1/assistants', (req: Request, res: Response) => {
   const body = req.body as CreateAssistantRequest;
-  
+
   const validationError = validateRequired(body, ['model']);
   if (validationError) {
     return res.status(400).json(errorResponse(validationError, 'invalid_request_error', 'model'));
@@ -148,7 +121,7 @@ router.delete('/v1/assistants/:assistant_id', (req: Request, res: Response) => {
 
 // Create thread
 router.post('/v1/threads', (req: Request, res: Response) => {
-  const body = req.body as CreateThreadRequest || {};
+  const body = (req.body || {}) as CreateThreadRequest;
 
   const thread: Thread = {
     id: state.generateThreadId(),
@@ -162,29 +135,18 @@ router.post('/v1/threads', (req: Request, res: Response) => {
   // Add initial messages if provided
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
-      const content = typeof msg.content === 'string' 
-        ? msg.content 
+      const content = typeof msg.content === 'string'
+        ? msg.content
         : JSON.stringify(msg.content);
-      
-      const message: Message = {
-        id: state.generateMessageId(),
-        object: 'thread.message',
-        created_at: Math.floor(Date.now() / 1000),
-        thread_id: thread.id,
-        status: 'completed',
-        incomplete_details: null,
-        completed_at: Math.floor(Date.now() / 1000),
-        incomplete_at: null,
+
+      const message = createMessage({
+        threadId: thread.id,
+        messageId: state.generateMessageId(),
+        content,
         role: msg.role || 'user',
-        content: [{
-          type: 'text',
-          text: { value: content, annotations: [] }
-        }],
-        assistant_id: null,
-        run_id: null,
         attachments: msg.attachments ?? [],
         metadata: msg.metadata ?? {}
-      };
+      });
       state.addMessage(thread.id, message);
     }
   }
@@ -231,35 +193,24 @@ router.post('/v1/threads/:thread_id/messages', (req: Request, res: Response) => 
   }
 
   const body = req.body as CreateMessageRequest;
-  
+
   const validationError = validateRequired(body, ['role', 'content']);
   if (validationError) {
     return res.status(400).json(errorResponse(validationError));
   }
 
-  const content = typeof body.content === 'string' 
-    ? body.content 
+  const content = typeof body.content === 'string'
+    ? body.content
     : JSON.stringify(body.content);
 
-  const message: Message = {
-    id: state.generateMessageId(),
-    object: 'thread.message',
-    created_at: Math.floor(Date.now() / 1000),
-    thread_id,
-    status: 'completed',
-    incomplete_details: null,
-    completed_at: Math.floor(Date.now() / 1000),
-    incomplete_at: null,
+  const message = createMessage({
+    threadId: thread_id,
+    messageId: state.generateMessageId(),
+    content,
     role: body.role,
-    content: [{
-      type: 'text',
-      text: { value: content, annotations: [] }
-    }],
-    assistant_id: null,
-    run_id: null,
     attachments: body.attachments ?? [],
     metadata: body.metadata ?? {}
-  };
+  });
 
   state.addMessage(thread_id, message);
   res.status(201).json(message);
@@ -325,7 +276,7 @@ router.post('/v1/threads/:thread_id/runs', async (req: Request, res: Response) =
   }
 
   const body = req.body as CreateRunRequest;
-  
+
   const validationError = validateRequired(body, ['assistant_id']);
   if (validationError) {
     return res.status(400).json(errorResponse(validationError, 'invalid_request_error', 'assistant_id'));
@@ -339,29 +290,18 @@ router.post('/v1/threads/:thread_id/runs', async (req: Request, res: Response) =
   // Add additional messages if provided
   if (body.additional_messages && Array.isArray(body.additional_messages)) {
     for (const msg of body.additional_messages) {
-      const content = typeof msg.content === 'string' 
-        ? msg.content 
+      const content = typeof msg.content === 'string'
+        ? msg.content
         : JSON.stringify(msg.content);
-      
-      const message: Message = {
-        id: state.generateMessageId(),
-        object: 'thread.message',
-        created_at: Math.floor(Date.now() / 1000),
-        thread_id,
-        status: 'completed',
-        incomplete_details: null,
-        completed_at: Math.floor(Date.now() / 1000),
-        incomplete_at: null,
+
+      const message = createMessage({
+        threadId: thread_id,
+        messageId: state.generateMessageId(),
+        content,
         role: msg.role || 'user',
-        content: [{
-          type: 'text',
-          text: { value: content, annotations: [] }
-        }],
-        assistant_id: null,
-        run_id: null,
         attachments: msg.attachments ?? [],
         metadata: msg.metadata ?? {}
-      };
+      });
       state.addMessage(thread_id, message);
     }
   }
@@ -516,7 +456,7 @@ router.post('/v1/threads/:thread_id/runs/:run_id/cancel', (req: Request, res: Re
 
 router.post('/v1/threads/runs', async (req: Request, res: Response) => {
   const body = req.body as CreateThreadAndRunRequest;
-  
+
   const validationError = validateRequired(body, ['assistant_id']);
   if (validationError) {
     return res.status(400).json(errorResponse(validationError, 'invalid_request_error', 'assistant_id'));
@@ -541,29 +481,18 @@ router.post('/v1/threads/runs', async (req: Request, res: Response) => {
   // Add initial messages if provided
   if (threadBody.messages && Array.isArray(threadBody.messages)) {
     for (const msg of threadBody.messages) {
-      const content = typeof msg.content === 'string' 
-        ? msg.content 
+      const content = typeof msg.content === 'string'
+        ? msg.content
         : JSON.stringify(msg.content);
-      
-      const message: Message = {
-        id: state.generateMessageId(),
-        object: 'thread.message',
-        created_at: Math.floor(Date.now() / 1000),
-        thread_id: thread.id,
-        status: 'completed',
-        incomplete_details: null,
-        completed_at: Math.floor(Date.now() / 1000),
-        incomplete_at: null,
+
+      const message = createMessage({
+        threadId: thread.id,
+        messageId: state.generateMessageId(),
+        content,
         role: msg.role || 'user',
-        content: [{
-          type: 'text',
-          text: { value: content, annotations: [] }
-        }],
-        assistant_id: null,
-        run_id: null,
         attachments: msg.attachments ?? [],
         metadata: msg.metadata ?? {}
-      };
+      });
       state.addMessage(thread.id, message);
     }
   }

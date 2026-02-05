@@ -1,9 +1,9 @@
 /**
  * In-Memory State Management for Assistants API
- * 
+ *
  * Stores assistants, threads, messages, runs, and run steps in memory.
  * Supports persistence via callbacks for VS Code globalState integration.
- * 
+ *
  * Features:
  * - Debounced auto-save on mutations
  * - Run steps tracking
@@ -20,6 +20,7 @@ import {
   OpenAIListResponse,
   ToolCall
 } from './types';
+import { generateId } from '../utils';
 
 // Context saved when a run requires tool outputs
 export interface PendingToolContext {
@@ -28,18 +29,6 @@ export interface PendingToolContext {
   toolCalls: ToolCall[];
   partialContent: string; // Text generated before tool calls
   stepId: string;         // The tool_calls step ID
-}
-
-// ID generation with OpenAI-style prefixes
-const ID_LENGTH = 24; // Length of the random component of generated IDs
-
-function generateId(prefix: string): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let id = '';
-  for (let i = 0; i < ID_LENGTH; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return `${prefix}_${id}`;
 }
 
 // Persistence callback type
@@ -95,7 +84,7 @@ class AssistantsState {
   }
 
   // ==================== ID Generators ====================
-  
+
   generateAssistantId(): string { return generateId('asst'); }
   generateThreadId(): string { return generateId('thread'); }
   generateMessageId(): string { return generateId('msg'); }
@@ -103,25 +92,25 @@ class AssistantsState {
   generateStepId(): string { return generateId('step'); }
 
   // ==================== Assistants ====================
-  
+
   createAssistant(assistant: Assistant): void {
     this.assistants.set(assistant.id, assistant);
     this.triggerPersist();
   }
-  
+
   getAssistant(id: string): Assistant | undefined {
     return this.assistants.get(id);
   }
-  
+
   listAssistants(params?: PaginationParams): OpenAIListResponse<Assistant> {
     let assistants = Array.from(this.assistants.values());
-    
+
     // Sort by created_at
     const order = params?.order ?? 'desc';
-    assistants.sort((a, b) => 
+    assistants.sort((a, b) =>
       order === 'desc' ? b.created_at - a.created_at : a.created_at - b.created_at
     );
-    
+
     // Apply cursor-based pagination
     if (params?.after) {
       const afterIndex = assistants.findIndex(a => a.id === params.after);
@@ -135,11 +124,11 @@ class AssistantsState {
         assistants = assistants.slice(0, beforeIndex);
       }
     }
-    
+
     const limit = Math.min(params?.limit ?? 20, 100);
     const hasMore = assistants.length > limit;
     assistants = assistants.slice(0, limit);
-    
+
     return {
       object: 'list',
       data: assistants,
@@ -148,7 +137,7 @@ class AssistantsState {
       has_more: hasMore
     };
   }
-  
+
   updateAssistant(id: string, updates: Partial<Assistant>): Assistant | undefined {
     const existing = this.assistants.get(id);
     if (!existing) return undefined;
@@ -157,7 +146,7 @@ class AssistantsState {
     this.triggerPersist();
     return updated;
   }
-  
+
   deleteAssistant(id: string): boolean {
     const result = this.assistants.delete(id);
     if (result) this.triggerPersist();
@@ -165,18 +154,18 @@ class AssistantsState {
   }
 
   // ==================== Threads ====================
-  
+
   createThread(thread: Thread): void {
     this.threads.set(thread.id, thread);
     this.messages.set(thread.id, []);
     this.runs.set(thread.id, []);
     this.triggerPersist();
   }
-  
+
   getThread(id: string): Thread | undefined {
     return this.threads.get(id);
   }
-  
+
   updateThread(id: string, updates: Partial<Thread>): Thread | undefined {
     const existing = this.threads.get(id);
     if (!existing) return undefined;
@@ -185,7 +174,7 @@ class AssistantsState {
     this.triggerPersist();
     return updated;
   }
-  
+
   deleteThread(id: string): boolean {
     // Also clean up run steps for runs in this thread
     const threadRuns = this.runs.get(id) || [];
@@ -200,28 +189,28 @@ class AssistantsState {
   }
 
   // ==================== Messages ====================
-  
+
   addMessage(threadId: string, message: Message): void {
     const threadMessages = this.messages.get(threadId) || [];
     threadMessages.push(message);
     this.messages.set(threadId, threadMessages);
     this.triggerPersist();
   }
-  
+
   getMessages(threadId: string, params?: PaginationParams & { run_id?: string }): OpenAIListResponse<Message> {
     let messages = this.messages.get(threadId) || [];
-    
+
     // Filter by run_id if specified
     if (params?.run_id) {
       messages = messages.filter(m => m.run_id === params.run_id);
     }
-    
+
     // Sort by created_at
     const order = params?.order ?? 'desc';
-    messages = [...messages].sort((a, b) => 
+    messages = [...messages].sort((a, b) =>
       order === 'desc' ? b.created_at - a.created_at : a.created_at - b.created_at
     );
-    
+
     // Apply cursor-based pagination
     if (params?.after) {
       const afterIndex = messages.findIndex(m => m.id === params.after);
@@ -235,11 +224,11 @@ class AssistantsState {
         messages = messages.slice(0, beforeIndex);
       }
     }
-    
+
     const limit = Math.min(params?.limit ?? 20, 100);
     const hasMore = messages.length > limit;
     messages = messages.slice(0, limit);
-    
+
     return {
       object: 'list',
       data: messages,
@@ -248,12 +237,12 @@ class AssistantsState {
       has_more: hasMore
     };
   }
-  
+
   getMessage(threadId: string, messageId: string): Message | undefined {
     const messages = this.messages.get(threadId) || [];
     return messages.find(m => m.id === messageId);
   }
-  
+
   updateMessage(threadId: string, messageId: string, updates: Partial<Message>): Message | undefined {
     const messages = this.messages.get(threadId);
     if (!messages) return undefined;
@@ -265,7 +254,7 @@ class AssistantsState {
   }
 
   // ==================== Runs ====================
-  
+
   addRun(threadId: string, run: Run): void {
     const threadRuns = this.runs.get(threadId) || [];
     threadRuns.push(run);
@@ -273,16 +262,16 @@ class AssistantsState {
     this.runSteps.set(run.id, []); // Initialize steps for this run
     this.triggerPersist();
   }
-  
+
   getRuns(threadId: string, params?: PaginationParams): OpenAIListResponse<Run> {
     let runs = this.runs.get(threadId) || [];
-    
+
     // Sort by created_at
     const order = params?.order ?? 'desc';
-    runs = [...runs].sort((a, b) => 
+    runs = [...runs].sort((a, b) =>
       order === 'desc' ? b.created_at - a.created_at : a.created_at - b.created_at
     );
-    
+
     // Apply cursor-based pagination
     if (params?.after) {
       const afterIndex = runs.findIndex(r => r.id === params.after);
@@ -296,11 +285,11 @@ class AssistantsState {
         runs = runs.slice(0, beforeIndex);
       }
     }
-    
+
     const limit = Math.min(params?.limit ?? 20, 100);
     const hasMore = runs.length > limit;
     runs = runs.slice(0, limit);
-    
+
     return {
       object: 'list',
       data: runs,
@@ -309,12 +298,12 @@ class AssistantsState {
       has_more: hasMore
     };
   }
-  
+
   getRun(threadId: string, runId: string): Run | undefined {
     const runs = this.runs.get(threadId) || [];
     return runs.find(r => r.id === runId);
   }
-  
+
   updateRun(threadId: string, runId: string, updates: Partial<Run>): Run | undefined {
     const runs = this.runs.get(threadId);
     if (!runs) return undefined;
@@ -401,13 +390,14 @@ class AssistantsState {
   }
 
   // ==================== Utility ====================
-  
+
   clear(): void {
     this.assistants.clear();
     this.threads.clear();
     this.messages.clear();
     this.runs.clear();
     this.runSteps.clear();
+    this.pendingToolContexts.clear();
     this.triggerPersist();
   }
 
