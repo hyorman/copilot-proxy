@@ -14,6 +14,10 @@ import { toVSCodeTools, toToolMode } from './toolConvert';
 
 let outputChannel: vscode.OutputChannel;
 
+export function getOutputChannel(): vscode.OutputChannel {
+  return outputChannel;
+}
+
 let serverInstance: ReturnType<typeof startServer> | undefined;
 
 // Model info interface for getAvailableModels

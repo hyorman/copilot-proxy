@@ -55,6 +55,29 @@ export function assistantToolsToFunctionTools(tools: AssistantTool[]): FunctionT
 }
 
 /**
+ * Convert Responses API tools (flat format) to OpenAI FunctionTool[] (nested format).
+ * Responses API: { type: "function", name, description, parameters }
+ * Chat Completions: { type: "function", function: { name, description, parameters } }
+ */
+export function responsesToolsToFunctionTools(tools: any[]): FunctionTool[] {
+  return tools.map(tool => {
+    if (tool.type === 'function' && tool.function) {
+      // Already in Chat Completions format
+      return tool as FunctionTool;
+    }
+    // Responses API flat format → nested format
+    return {
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    };
+  });
+}
+
+/**
  * Convert OpenAI tool_choice to VS Code LanguageModelChatToolMode
  * Returns undefined when tools should be omitted entirely (choice === 'none')
  */

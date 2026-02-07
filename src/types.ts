@@ -175,7 +175,7 @@ export interface ChatCompletionChunk {
 // ==================== Responses API ====================
 
 export interface ResponseInputItem {
-  type: 'message';
+  type?: 'message';
   role: 'user' | 'assistant' | 'system';
   content: string | ResponseContentItem[];
 }
@@ -195,7 +195,7 @@ export interface CreateResponseRequest {
   top_p?: number;
   store?: boolean;
   metadata?: Record<string, string>;
-  tools?: FunctionTool[];
+  tools?: FunctionTool[] | any[];
   tool_choice?: 'none' | 'auto' | 'required' | { type: 'function'; name: string };
   previous_response_id?: string;
   parallel_tool_calls?: boolean;

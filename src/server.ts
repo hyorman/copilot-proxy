@@ -17,13 +17,46 @@ import {
   ChatMessage
 } from './types';
 import { processChatRequest, getAvailableModels } from './extension';
+import { responsesToolsToFunctionTools } from './toolConvert';
 import { assistantsRouter } from './assistants';
 import { generateId, errorResponse, setApiTokens, addApiToken, removeApiToken, authMiddleware } from './utils';
+import { getOutputChannel } from './extension';
 
 const app = express();
 
 // Middleware to parse JSON bodies (50MB limit to accommodate large tool results)
 app.use(express.json({ limit: '50mb' }));
+
+// Custom request logging middleware
+app.use((req: Request, res: Response, next) => {
+  const timestamp = new Date().toISOString();
+  const outputChannel = getOutputChannel();
+  outputChannel.appendLine(`\n[${timestamp}] ${req.method} ${req.path}`);
+
+  // Log query parameters if present
+  if (Object.keys(req.query).length > 0) {
+    outputChannel.appendLine(`  Query: ${JSON.stringify(req.query)}`);
+  }
+
+  // Log request body for POST/PUT/PATCH (but limit size to avoid huge logs)
+  if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
+    const bodyStr = JSON.stringify(req.body);
+    if (bodyStr.length > 500) {
+      outputChannel.appendLine(`  Body: ${bodyStr.substring(0, 500)}... (${bodyStr.length} chars total)`);
+    } else {
+      outputChannel.appendLine(`  Body: ${bodyStr}`);
+    }
+  }
+
+  // Log response status code when response finishes
+  const originalSend = res.send;
+  res.send = function(data) {
+    outputChannel.appendLine(`[${timestamp}] ${req.method} ${req.path} → ${res.statusCode}`);
+    return originalSend.call(this, data);
+  };
+
+  next();
+});
 
 // Logger middleware
 app.use(morgan('combined'));
@@ -205,7 +238,7 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
     messages.push({ role: 'user', content: input });
   } else if (Array.isArray(input)) {
     for (const item of input) {
-      if (item.type === 'message') {
+      if (item.type === 'message' || ('role' in item && !('call_id' in item))) {
         const content = typeof item.content === 'string'
           ? item.content
           : item.content.map(c => c.text).join('');
@@ -228,7 +261,7 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
     stream: stream ?? false,
     temperature,
     max_tokens: max_output_tokens,
-    tools: tools,
+    tools: tools ? responsesToolsToFunctionTools(tools) : undefined,
     // Map 'required' to 'auto' since ChatCompletionRequest doesn't support 'required'
     tool_choice: (tool_choice === 'required' ? 'auto' : tool_choice) as ChatCompletionRequest['tool_choice'],
   };
@@ -516,6 +549,16 @@ app.get('/health', (req: Request, res: Response) => {
 // ==================== 404 Handler ====================
 
 app.use((req: Request, res: Response) => {
+  const outputChannel = getOutputChannel();
+  outputChannel.appendLine(`\n⚠️  UNIMPLEMENTED ENDPOINT: ${req.method} ${req.path}`);
+  if (Object.keys(req.query).length > 0) {
+    outputChannel.appendLine(`   Query: ${JSON.stringify(req.query)}`);
+  }
+  if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
+    const bodyStr = JSON.stringify(req.body);
+    outputChannel.appendLine(`   Body: ${bodyStr.substring(0, 300)}${bodyStr.length > 300 ? '...' : ''}`);
+  }
+
   res.status(404).json(
     errorResponse(
       `Unknown endpoint: ${req.method} ${req.path}`,
