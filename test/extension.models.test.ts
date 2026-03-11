@@ -160,7 +160,7 @@ describe('model listing helpers', () => {
         model: 'text-embedding-3-small',
         input: 'hello world',
       })
-    ).rejects.toThrow(/enable-proposed-api hyorman\.copilot-proxy/);
+    ).rejects.toThrow(/embeddings.*enabledApiProposals/);
   });
 
   it('uses embedding models for embedding requests', async () => {
