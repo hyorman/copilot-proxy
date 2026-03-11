@@ -14,6 +14,7 @@
  */
 
 import { ToolCall } from '../types';
+import type { SkillAttachment } from '../skills/types';
 
 // Re-export ToolCall so consumers don't need to change imports
 export { ToolCall };
@@ -67,6 +68,7 @@ export interface Assistant {
   model: string;                           // e.g., "gpt-4o", "claude-3.5-sonnet"
   instructions: string | null;             // System prompt
   tools: AssistantTool[];
+  skills: SkillAttachment[];
   metadata: Record<string, string>;        // User-defined key-value pairs (max 16)
   // Future: tool_resources, temperature, top_p, response_format
 }
@@ -77,6 +79,7 @@ export interface CreateAssistantRequest {
   description?: string;
   instructions?: string;
   tools?: AssistantTool[];
+  skills?: SkillAttachment[];
   metadata?: Record<string, string>;
   // Future: tool_resources, temperature, top_p, response_format
 }
@@ -87,6 +90,7 @@ export interface UpdateAssistantRequest {
   description?: string | null;
   instructions?: string | null;
   tools?: AssistantTool[];
+  skills?: SkillAttachment[];
   metadata?: Record<string, string>;
 }
 
@@ -232,6 +236,7 @@ export interface Run {
   model: string;
   instructions: string | null;             // Override assistant instructions
   tools: AssistantTool[];
+  skills: SkillAttachment[];
   metadata: Record<string, string>;
   usage: RunUsage | null;
   // Future: temperature, top_p, max_prompt_tokens, max_completion_tokens,
@@ -245,6 +250,7 @@ export interface CreateRunRequest {
   additional_instructions?: string;        // Append to instructions
   additional_messages?: CreateMessageRequest[];
   tools?: AssistantTool[];
+  skills?: SkillAttachment[];
   metadata?: Record<string, string>;
   stream?: boolean;                        // Future: streaming runs
   // Future: temperature, top_p, max_prompt_tokens, max_completion_tokens,
@@ -258,6 +264,7 @@ export interface CreateThreadAndRunRequest {
   model?: string;
   instructions?: string;
   tools?: AssistantTool[];
+  skills?: SkillAttachment[];
   metadata?: Record<string, string>;
   stream?: boolean;
 }

@@ -74,6 +74,7 @@ router.post('/v1/assistants', (req: Request, res: Response) => {
     model: body.model,
     instructions: body.instructions ?? null,
     tools: body.tools ?? [],
+    skills: body.skills ?? [],
     metadata: body.metadata ?? {}
   };
 
@@ -265,6 +266,22 @@ router.post('/v1/threads/:thread_id/messages/:message_id', (req: Request, res: R
   res.json(updated);
 });
 
+// Delete message
+router.delete('/v1/threads/:thread_id/messages/:message_id', (req: Request, res: Response) => {
+  const { thread_id, message_id } = req.params;
+  const thread = state.getThread(thread_id);
+  if (!thread) {
+    return res.status(404).json(notFoundError('thread'));
+  }
+
+  const deleted = state.deleteMessage(thread_id, message_id);
+  res.json({
+    id: message_id,
+    object: 'thread.message.deleted',
+    deleted
+  });
+});
+
 // ==================== Runs Routes ====================
 
 // Create run
@@ -324,6 +341,7 @@ router.post('/v1/threads/:thread_id/runs', async (req: Request, res: Response) =
     model: body.model ?? assistant.model,
     instructions: body.instructions ?? null,
     tools: body.tools ?? assistant.tools,
+    skills: body.skills ?? assistant.skills,
     metadata: body.metadata ?? {},
     usage: null
   };
@@ -516,6 +534,7 @@ router.post('/v1/threads/runs', async (req: Request, res: Response) => {
     model: body.model ?? assistant.model,
     instructions: body.instructions ?? null,
     tools: body.tools ?? assistant.tools,
+    skills: body.skills ?? assistant.skills,
     metadata: body.metadata ?? {},
     usage: null
   };

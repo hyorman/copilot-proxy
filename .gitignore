@@ -2,3 +2,8 @@ node_modules
 out
 .venv
 .DS_Store
+vitest.config.js
+vitest.config.js.map
+test/**/*.js
+test/**/*.js.map
+.vscode

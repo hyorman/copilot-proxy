@@ -81,7 +81,7 @@ export interface CompletionResponse {
   usage: ChatCompletionUsage;
 }
 
-// ==================== Embeddings API (Stub) ====================
+// ==================== Embeddings API ====================
 
 export interface EmbeddingRequest {
   input: string | string[];
@@ -89,6 +89,22 @@ export interface EmbeddingRequest {
   encoding_format?: 'float' | 'base64';
   dimensions?: number;
   user?: string;
+}
+
+export interface EmbeddingObject {
+  object: 'embedding';
+  embedding: number[];
+  index: number;
+}
+
+export interface EmbeddingResponse {
+  object: 'list';
+  data: EmbeddingObject[];
+  model: string;
+  usage: {
+    prompt_tokens: number;
+    total_tokens: number;
+  };
 }
 
 // ==================== Models API ====================
@@ -120,19 +136,25 @@ export interface ChatCompletionResponse {
   id: string;
   object: 'chat.completion';
   created: number;
+  model: string;
   choices: ChatCompletionChoice[];
   usage: ChatCompletionUsage;
+  service_tier: string | null;
+  system_fingerprint: string | null;
 }
 
 export interface ChatCompletionChoice {
   index: number;
   message: ChatCompletionMessage;
+  logprobs: object | null;
   finish_reason: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null;
 }
 
 export interface ChatCompletionMessage {
   role: 'assistant';
   content: string | null;
+  refusal?: string | null;
+  annotations?: unknown[];
   tool_calls?: ToolCall[];
 }
 
@@ -140,6 +162,16 @@ export interface ChatCompletionUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  prompt_tokens_details?: {
+    cached_tokens: number;
+    audio_tokens: number;
+  };
+  completion_tokens_details?: {
+    reasoning_tokens: number;
+    audio_tokens: number;
+    accepted_prediction_tokens: number;
+    rejected_prediction_tokens: number;
+  };
 }
 
 export interface ChatCompletionChunkDelta {
@@ -199,6 +231,9 @@ export interface CreateResponseRequest {
   tool_choice?: 'none' | 'auto' | 'required' | { type: 'function'; name: string };
   previous_response_id?: string;
   parallel_tool_calls?: boolean;
+  user?: string;
+  /** Skill attachments — resolved and injected as additional instructions */
+  skills?: import('./skills/types').SkillAttachment[];
 }
 
 export interface ResponseOutputItem {
@@ -220,16 +255,25 @@ export interface ResponseObject {
   object: 'response';
   created_at: number;
   status: 'completed' | 'failed' | 'in_progress' | 'cancelled' | 'queued' | 'incomplete';
+  background: boolean;
   completed_at: number | null;
+  conversation: { id: string } | null;
   error: { message: string; type: string; code: string } | null;
   incomplete_details: { reason: string } | null;
   instructions: string | null;
   max_output_tokens: number | null;
+  max_tool_calls: number | null;
   model: string;
-  output: ResponseOutputItem[];
+  output: ResponseOutputItemUnion[];
+  output_text: string;
   parallel_tool_calls: boolean;
   previous_response_id: string | null;
+  reasoning: { effort: string | null; generate_summary: string | null; summary: string | null } | null;
+  service_tier: string | null;
   temperature: number;
+  text: { format: { type: string } } | null;
+  tool_choice: 'none' | 'auto' | 'required' | { type: 'function'; name: string } | string;
+  tools: unknown[];
   top_p: number;
   truncation: 'auto' | 'disabled';
   usage: {
@@ -239,6 +283,7 @@ export interface ResponseObject {
     output_tokens_details: { reasoning_tokens: number };
     total_tokens: number;
   } | null;
+  user: string | null;
   metadata: Record<string, string>;
 }
 

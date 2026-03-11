@@ -7,6 +7,7 @@ import {
   CompletionRequest,
   CompletionResponse,
   EmbeddingRequest,
+  EmbeddingResponse,
   ModelObject,
   ModelsListResponse,
   CreateResponseRequest,
@@ -16,13 +17,20 @@ import {
   ResponseOutputItemUnion,
   ChatMessage
 } from './types';
-import { processChatRequest, getAvailableModels } from './extension';
+import { processChatRequest, processEmbeddingRequest, getAvailableChatModels, getAvailableEmbeddingModels, getAvailableModels } from './extension';
 import { responsesToolsToFunctionTools } from './toolConvert';
 import { assistantsRouter } from './assistants';
+import { skillsRouter, setSkillStorageDir } from './skills';
+import { resolveSkills, buildSkillInstructions } from './skills/resolver';
 import { generateId, errorResponse, setApiTokens, addApiToken, removeApiToken, authMiddleware } from './utils';
 import { getOutputChannel } from './extension';
 
 const app = express();
+
+function isEmbeddingsProposalUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('CANNOT use API proposal: embeddings') || message.includes('No embedding models available');
+}
 
 // Middleware to parse JSON bodies (50MB limit to accommodate large tool results)
 app.use(express.json({ limit: '50mb' }));
@@ -71,10 +79,32 @@ app.use(authMiddleware);
 
 // ==================== Models Endpoints ====================
 
+function getModelsByType(type?: string) {
+  if (type === 'chat') {
+    return getAvailableChatModels();
+  }
+
+  if (type === 'embedding' || type === 'embeddings') {
+    try {
+      return Promise.resolve(
+        getAvailableEmbeddingModels().map(name => ({
+          vendor: 'copilot',
+          family: name,
+        }))
+      );
+    } catch {
+      return Promise.resolve([]);
+    }
+  }
+
+  return getAvailableModels();
+}
+
 // GET /v1/models - List available models
 app.get('/v1/models', async (req: Request, res: Response) => {
   try {
-    const models = await getAvailableModels();
+    const requestedType = typeof req.query.type === 'string' ? req.query.type.toLowerCase() : undefined;
+    const models = await getModelsByType(requestedType);
     const response: ModelsListResponse = {
       object: 'list',
       data: models.map(m => ({
@@ -94,7 +124,8 @@ app.get('/v1/models', async (req: Request, res: Response) => {
 // GET /v1/models/:model - Get specific model
 app.get('/v1/models/:model', async (req: Request, res: Response) => {
   try {
-    const models = await getAvailableModels();
+    const requestedType = typeof req.query.type === 'string' ? req.query.type.toLowerCase() : undefined;
+    const models = await getModelsByType(requestedType);
     const model = models.find(m => m.family === req.params.model);
 
     if (!model) {
@@ -116,19 +147,25 @@ app.get('/v1/models/:model', async (req: Request, res: Response) => {
   }
 });
 
-// ==================== Embeddings Endpoint (Stub) ====================
+// ==================== Embeddings Endpoint ====================
 
-// POST /v1/embeddings - Returns 501 Not Implemented
-app.post('/v1/embeddings', (req: Request<{}, {}, EmbeddingRequest>, res: Response) => {
-  res.status(501).json(
-    errorResponse(
-      'Embeddings are not supported by the VS Code Language Model API. ' +
-      'Consider using an external embedding service like OpenAI, Ollama, or a local embedding model.',
-      'not_implemented',
-      null,
-      'embeddings_not_supported'
-    )
-  );
+// POST /v1/embeddings - Compute embeddings via VS Code proposed Embeddings API
+app.post('/v1/embeddings', async (req: Request<{}, {}, EmbeddingRequest>, res: Response) => {
+  try {
+    const result = await processEmbeddingRequest(req.body);
+    res.json(result);
+  } catch (err: any) {
+    const message = err?.message ?? 'Unknown error computing embeddings';
+    const proposalUnavailable = isEmbeddingsProposalUnavailable(err);
+    res.status(proposalUnavailable ? 501 : 500).json(
+      errorResponse(
+        message,
+        proposalUnavailable ? 'not_implemented' : 'server_error',
+        null,
+        proposalUnavailable ? 'embeddings_proposal_not_enabled' : 'embedding_error'
+      )
+    );
+  }
 });
 
 // ==================== Legacy Completions Endpoint ====================
@@ -215,7 +252,7 @@ app.post<{}, {}, CompletionRequest>('/v1/completions', async (req: Request, res:
 
 // POST /v1/responses - Create a model response (new OpenAI API)
 app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
-  const { model, input, instructions, stream, temperature, max_output_tokens, metadata, tools, tool_choice } = req.body;
+  const { model, input, instructions, stream, temperature, max_output_tokens, metadata, tools, tool_choice, skills } = req.body;
 
   // Validate required field
   if (!model) {
@@ -225,12 +262,42 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
   // Remove vendor prefixes (don't mutate req.body)
   const cleanModel = model.split('/').pop()!;
 
+  // Resolve attached skills into instruction text
+  let skillInstructions = '';
+  if (skills && skills.length > 0) {
+    try {
+      const resolved = resolveSkills(skills);
+      skillInstructions = buildSkillInstructions(resolved);
+    } catch (err) {
+      return res.status(400).json(
+        errorResponse(err instanceof Error ? err.message : 'Failed to resolve skills', 'invalid_request_error', 'skills')
+      );
+    }
+  }
+
+  // Also extract skills from tools entries that have environment.skills
+  if (tools) {
+    for (const tool of tools) {
+      if (tool.environment?.skills && Array.isArray(tool.environment.skills)) {
+        try {
+          const resolved = resolveSkills(tool.environment.skills);
+          skillInstructions += buildSkillInstructions(resolved);
+        } catch (err) {
+          return res.status(400).json(
+            errorResponse(err instanceof Error ? err.message : 'Failed to resolve skills', 'invalid_request_error', 'tools')
+          );
+        }
+      }
+    }
+  }
+
   // Convert input to chat messages
   const messages: ChatMessage[] = [];
 
-  // Add instructions as system message if provided
-  if (instructions) {
-    messages.push({ role: 'system', content: instructions });
+  // Add instructions as system message if provided (with skill instructions appended)
+  const combinedInstructions = (instructions ?? '') + skillInstructions;
+  if (combinedInstructions) {
+    messages.push({ role: 'system', content: combinedInstructions });
   }
 
   // Process input
@@ -255,13 +322,17 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
   }
 
   // Build chat completion request with native tool support
+  // Filter out non-function tools (e.g. code_interpreter with environment.skills) before converting
+  const functionTools = tools
+    ? responsesToolsToFunctionTools(tools.filter((t: any) => t.type === 'function'))
+    : undefined;
   const chatRequest: ChatCompletionRequest = {
     model: cleanModel,
     messages,
     stream: stream ?? false,
     temperature,
     max_tokens: max_output_tokens,
-    tools: tools ? responsesToolsToFunctionTools(tools) : undefined,
+    tools: functionTools?.length ? functionTools : undefined,
     // Map 'required' to 'auto' since ChatCompletionRequest doesn't support 'required'
     tool_choice: (tool_choice === 'required' ? 'auto' : tool_choice) as ChatCompletionRequest['tool_choice'],
   };
@@ -282,19 +353,29 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
         object: 'response',
         created_at: createdAt,
         status: 'in_progress',
+        background: false,
         completed_at: null,
+        conversation: null,
         error: null,
         incomplete_details: null,
         instructions: instructions ?? null,
         max_output_tokens: max_output_tokens ?? null,
+        max_tool_calls: null,
         model: cleanModel,
         output: [],
-        parallel_tool_calls: true,
+        output_text: '',
+        parallel_tool_calls: req.body.parallel_tool_calls ?? true,
         previous_response_id: req.body.previous_response_id ?? null,
+        reasoning: null,
+        service_tier: 'default',
         temperature: temperature ?? 1,
+        text: null,
+        tool_choice: tool_choice ?? 'auto',
+        tools: tools ?? [],
         top_p: req.body.top_p ?? 1,
         truncation: 'disabled',
         usage: null,
+        user: req.body.user ?? null,
         metadata: metadata ?? {}
       };
 
@@ -367,12 +448,12 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
       }
 
       // Send completed response
-      const completedResponse = {
+      const completedResponse: ResponseObject = {
         ...initialResponse,
         status: 'completed' as const,
         completed_at: Math.floor(Date.now() / 1000),
         output,
-        tools: tools ?? [],
+        output_text: fullContent,
         usage: {
           input_tokens: 0,
           input_tokens_details: { cached_tokens: 0 },
@@ -447,23 +528,32 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
         });
       }
 
-      const response = {
+      const response: ResponseObject = {
         id: responseId,
-        object: 'response' as const,
+        object: 'response',
         created_at: createdAt,
-        status: 'completed' as const,
+        status: 'completed',
+        background: false,
         completed_at: Math.floor(Date.now() / 1000),
+        conversation: null,
         error: null,
         incomplete_details: null,
         instructions: instructions ?? null,
         max_output_tokens: max_output_tokens ?? null,
+        max_tool_calls: null,
         model: cleanModel,
         output,
+        output_text: rawContent,
         parallel_tool_calls: req.body.parallel_tool_calls ?? true,
         previous_response_id: req.body.previous_response_id ?? null,
+        reasoning: null,
+        service_tier: 'default',
         temperature: temperature ?? 1,
+        text: null,
+        tool_choice: tool_choice ?? 'auto',
+        tools: tools ?? [],
         top_p: req.body.top_p ?? 1,
-        truncation: 'disabled' as const,
+        truncation: 'disabled',
         usage: {
           input_tokens: chatResponse.usage?.prompt_tokens ?? 0,
           input_tokens_details: { cached_tokens: 0 },
@@ -471,8 +561,8 @@ app.post<{}, {}, CreateResponseRequest>('/v1/responses', async (req, res) => {
           output_tokens_details: { reasoning_tokens: 0 },
           total_tokens: chatResponse.usage?.total_tokens ?? rawContent.length
         },
-        metadata: metadata ?? {},
-        tools: tools ?? []
+        user: req.body.user ?? null,
+        metadata: metadata ?? {}
       };
 
       res.json(response);
@@ -539,6 +629,11 @@ app.post<{}, {}, ChatCompletionRequest>('/v1/chat/completions', async (req, res)
 
 // Mount assistants router for /v1/assistants, /v1/threads, etc.
 app.use(assistantsRouter);
+
+// ==================== Skills API Routes ====================
+
+// Mount skills router for /v1/skills
+app.use('/v1/skills', skillsRouter);
 
 // ==================== Health Check ====================
 

@@ -18,6 +18,7 @@ import { processChatRequest } from '../extension';
 import { ChatCompletionRequest, ChatCompletionChunk, ChatCompletionResponse, ChatMessage } from '../types';
 import { createMessage } from '../utils';
 import { assistantToolsToFunctionTools } from '../toolConvert';
+import { resolveSkills, buildSkillInstructions } from '../skills/resolver';
 import {
   Run,
   Message,
@@ -137,6 +138,19 @@ export async function* executeRun(
     }
     if (run.instructions) {
       systemContent += (systemContent ? '\n\n' : '') + run.instructions;
+    }
+
+    // Resolve and inject skills
+    const skills = run.skills.length > 0 ? run.skills : assistant.skills;
+    if (skills.length > 0) {
+      try {
+        const resolved = resolveSkills(skills);
+        if (resolved.length > 0) {
+          systemContent += (systemContent ? '\n\n' : '') + buildSkillInstructions(resolved);
+        }
+      } catch (err) {
+        console.warn('Failed to resolve skills for run', runId, err);
+      }
     }
 
     // Get tools for native passing
@@ -667,6 +681,19 @@ export async function* continueRunWithToolOutputs(
     }
     if (run.instructions) {
       systemContent += (systemContent ? '\n\n' : '') + run.instructions;
+    }
+
+    // Resolve and inject skills
+    const skillAttachments = run.skills.length > 0 ? run.skills : assistant.skills;
+    if (skillAttachments.length > 0) {
+      try {
+        const resolved = resolveSkills(skillAttachments);
+        if (resolved.length > 0) {
+          systemContent += (systemContent ? '\n\n' : '') + buildSkillInstructions(resolved);
+        }
+      } catch (err) {
+        console.warn('Failed to resolve skills for run', runId, err);
+      }
     }
 
     // Get tools for native passing

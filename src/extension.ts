@@ -5,11 +5,15 @@ import {
   ChatCompletionChunk,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  EmbeddingRequest,
+  EmbeddingResponse,
   StructuredMessageContent,
   ToolCall,
   ToolCallChunk
 } from './types';
 import { state, SerializedState } from './assistants';
+import { skillsState, SerializedSkillsState, setSkillStorageDir } from './skills';
+import { getSkillStorageDir } from './skills/storage';
 import { toVSCodeTools, toToolMode } from './toolConvert';
 
 let outputChannel: vscode.OutputChannel;
@@ -39,6 +43,7 @@ interface TokenInfo {
 
 // State persistence keys
 const STATE_KEY = 'copilotProxy.assistantsState';
+const SKILLS_STATE_KEY = 'copilotProxy.skillsState';
 const TOKENS_KEY = 'copilotProxy.apiTokens';
 
 /**
@@ -88,18 +93,53 @@ function configurePort() {
 }
 
 /**
- * Get available models from VS Code Language Model API
+ * Get available chat models from VS Code Language Model API.
  */
-export async function getAvailableModels(): Promise<ModelInfo[]> {
-  const models = await vscode.lm.selectChatModels({});
-  return models.map(m => {
+export async function getAvailableChatModels(): Promise<ModelInfo[]> {
+  const chatModels = await vscode.lm.selectChatModels({});
+  return (chatModels || []).map(m => {
     const model = m as LanguageModelChatWithId;
     return {
       vendor: model.vendor,
       family: model.family,
       id: model.id
-    };
+    } as ModelInfo;
   });
+}
+
+/**
+ * Get all available models from the VS Code LM APIs.
+ * This mirrors OpenAI-style /v1/models behavior by returning both chat and
+ * embedding models in one list, while dedicated helpers remain available for
+ * clients that want a narrower view.
+ */
+export async function getAvailableModels(): Promise<ModelInfo[]> {
+  const chatInfos = await getAvailableChatModels();
+  const embedInfos: ModelInfo[] = getAvailableEmbeddingModels().map(name => ({
+    vendor: 'copilot',
+    family: name,
+  }));
+
+  const merged: ModelInfo[] = [...chatInfos];
+  for (const embeddingModel of embedInfos) {
+    if (!merged.find(model => model.family === embeddingModel.family)) {
+      merged.push(embeddingModel);
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Get available embedding models from the proposed VS Code Embeddings API.
+ */
+export function getAvailableEmbeddingModels(): string[] {
+  try {
+    return vscode.lm.embeddingModels ?? [];
+  } catch (error) {
+    outputChannel?.appendLine(`Embedding model enumeration unavailable: ${String(error)}`);
+    return [];
+  }
 }
 
 
@@ -131,6 +171,33 @@ export function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine(`Error saving state: ${err}`);
     }
   }, 1000); // 1 second debounce
+
+  // ==================== Skills State Persistence ====================
+
+  // Set skill storage directory
+  const skillStorageDir = getSkillStorageDir(context.globalStorageUri.fsPath);
+  setSkillStorageDir(skillStorageDir);
+
+  // Restore skills state from globalState
+  const savedSkillsState = context.globalState.get<SerializedSkillsState>(SKILLS_STATE_KEY);
+  if (savedSkillsState) {
+    try {
+      skillsState.restore(savedSkillsState);
+      outputChannel.appendLine('Restored skills state from previous session.');
+    } catch (err) {
+      outputChannel.appendLine(`Error restoring skills state: ${err}`);
+    }
+  }
+
+  // Set up skills persistence callback
+  skillsState.setPersistCallback(async (data) => {
+    try {
+      await context.globalState.update(SKILLS_STATE_KEY, data);
+      outputChannel.appendLine('Skills state saved.');
+    } catch (err) {
+      outputChannel.appendLine(`Error saving skills state: ${err}`);
+    }
+  }, 1000);
 
   // Register command to start the Express server.
   context.subscriptions.push(
@@ -331,6 +398,51 @@ function extractMessageContent(content: string | StructuredMessageContent[] | nu
     return content.map(item => item.text).join('\n');
   }
   return String(content);
+}
+
+export async function processEmbeddingRequest(request: EmbeddingRequest): Promise<EmbeddingResponse> {
+  // Normalize input to array
+  const inputs = Array.isArray(request.input) ? request.input : [request.input];
+
+  // Access proposed embeddings API
+  const embeddingModels = getAvailableEmbeddingModels();
+  if (embeddingModels.length === 0) {
+    throw new Error(
+      'No embedding models available. The VS Code Embeddings API is a proposed API and may not be enabled. ' +
+      'Ensure your VS Code version supports it and the extension has "embeddings" in enabledApiProposals.'
+    );
+  }
+
+  // Find matching model or use first available
+  let selectedModel = embeddingModels[0];
+  if (request.model) {
+    const match = embeddingModels.find(m => m === request.model);
+    if (match) {
+      selectedModel = match;
+    }
+  }
+
+  const result: vscode.Embedding[] = await vscode.lm.computeEmbeddings(selectedModel, inputs);
+
+  // Estimate tokens (rough: ~4 chars per token)
+  const totalChars = inputs.reduce((sum, s) => sum + s.length, 0);
+  const estimatedTokens = Math.ceil(totalChars / 4);
+
+  const data = result.map((embedding, index) => ({
+    object: 'embedding' as const,
+    embedding: Array.from(embedding.values) as number[],
+    index,
+  }));
+
+  return {
+    object: 'list',
+    data,
+    model: selectedModel,
+    usage: {
+      prompt_tokens: estimatedTokens,
+      total_tokens: estimatedTokens,
+    },
+  };
 }
 
 export async function processChatRequest(request: ChatCompletionRequest): Promise<AsyncIterable<ChatCompletionChunk> | ChatCompletionResponse> {
@@ -568,27 +680,35 @@ export async function processChatRequest(request: ChatCompletionRequest): Promis
       }
 
       const hasToolCalls = toolCalls.length > 0;
+      const completionTokens = Math.ceil(fullContent.length / 4);
       const response: ChatCompletionResponse = {
-        id: "chatcmpl-nonstream",
+        id: `chatcmpl-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
         object: "chat.completion",
         created: Math.floor(Date.now() / 1000),
+        model: request.model,
         choices: [
           {
             index: 0,
             message: {
               role: "assistant",
               content: fullContent || null,
+              refusal: null,
+              annotations: [],
               ...(hasToolCalls ? { tool_calls: toolCalls } : {}),
             },
+            logprobs: null,
             finish_reason: hasToolCalls ? "tool_calls" : "stop",
           },
         ],
         usage: {
           prompt_tokens: 0,
-          // Rough token estimate (~4 chars per token); not exact but better than char count
-          completion_tokens: Math.ceil(fullContent.length / 4),
-          total_tokens: Math.ceil(fullContent.length / 4),
+          completion_tokens: completionTokens,
+          total_tokens: completionTokens,
+          prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 },
+          completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0, accepted_prediction_tokens: 0, rejected_prediction_tokens: 0 },
         },
+        service_tier: 'default',
+        system_fingerprint: null,
       };
       return response;
     } catch (error) {

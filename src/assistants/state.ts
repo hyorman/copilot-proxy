@@ -253,6 +253,16 @@ class AssistantsState {
     return messages[index];
   }
 
+  deleteMessage(threadId: string, messageId: string): boolean {
+    const messages = this.messages.get(threadId);
+    if (!messages) return false;
+    const index = messages.findIndex(m => m.id === messageId);
+    if (index === -1) return false;
+    messages.splice(index, 1);
+    this.triggerPersist();
+    return true;
+  }
+
   // ==================== Runs ====================
 
   addRun(threadId: string, run: Run): void {
