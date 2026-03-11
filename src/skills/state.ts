@@ -144,6 +144,18 @@ class SkillsState {
 
     skill.versions = skill.versions.filter((v) => v.version !== version);
 
+    // Recompute latest_version from remaining versions
+    if (skill.versions.length > 0) {
+      skill.latest_version = Math.max(...skill.versions.map((v) => v.version));
+    } else {
+      skill.latest_version = 0;
+    }
+
+    // Reset default_version if it pointed to the deleted version
+    if (skill.default_version === version) {
+      skill.default_version = skill.latest_version;
+    }
+
     this.triggerPersist();
     return skill;
   }

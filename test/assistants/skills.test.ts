@@ -151,7 +151,7 @@ describe('Assistants API - Skills Integration', () => {
           type: 'inline',
           name: 'Inline',
           description: 'Inline desc',
-          source: { type: 'base64', media_type: 'text/markdown', data: btoa('body') },
+          source: { type: 'base64', media_type: 'text/markdown', data: Buffer.from('body').toString('base64') },
         },
         { type: 'skill_reference', skill_id: 'skill_two', version: 2 },
       ];

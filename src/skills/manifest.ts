@@ -9,13 +9,14 @@ import { SkillManifest, SkillFile } from './types';
 export function parseManifest(content: string): SkillManifest {
   const lines = content.split('\n');
 
-  // Find opening ---
+  // Find opening --- (must be the first non-blank line)
   let openingIndex = -1;
   for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue;
     if (lines[i].trim() === '---') {
       openingIndex = i;
-      break;
     }
+    break;
   }
 
   if (openingIndex === -1) {

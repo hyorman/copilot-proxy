@@ -149,8 +149,13 @@ export function saveSkillVersion(
   version: number,
   files: SkillFile[]
 ): void {
+  const baseDir = path.resolve(storageDir, skillId, `v${version}`);
   for (const file of files) {
-    const filePath = path.join(storageDir, skillId, `v${version}`, file.path);
+    // Validate file path to prevent path traversal (zip-slip)
+    const filePath = path.resolve(baseDir, file.path);
+    if (!filePath.startsWith(baseDir + path.sep) && filePath !== baseDir) {
+      throw new Error(`Invalid file path: ${file.path}`);
+    }
     const fileDir = path.dirname(filePath);
     fs.mkdirSync(fileDir, { recursive: true });
     fs.writeFileSync(filePath, file.content);

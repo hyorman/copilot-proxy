@@ -39,27 +39,37 @@ app.use(express.json({ limit: '50mb' }));
 app.use((req: Request, res: Response, next) => {
   const timestamp = new Date().toISOString();
   const outputChannel = getOutputChannel();
-  outputChannel.appendLine(`\n[${timestamp}] ${req.method} ${req.path}`);
+  const log = outputChannel ? (msg: string) => outputChannel.appendLine(msg) : console.log;
+  log(`\n[${timestamp}] ${req.method} ${req.path}`);
 
   // Log query parameters if present
   if (Object.keys(req.query).length > 0) {
-    outputChannel.appendLine(`  Query: ${JSON.stringify(req.query)}`);
+    log(`  Query: ${JSON.stringify(req.query)}`);
   }
 
-  // Log request body for POST/PUT/PATCH (but limit size to avoid huge logs)
+  // Log request body metadata for POST/PUT/PATCH (avoid full stringify of large bodies)
   if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
-    const bodyStr = JSON.stringify(req.body);
-    if (bodyStr.length > 500) {
-      outputChannel.appendLine(`  Body: ${bodyStr.substring(0, 500)}... (${bodyStr.length} chars total)`);
-    } else {
-      outputChannel.appendLine(`  Body: ${bodyStr}`);
+    const contentLength = req.headers['content-length'];
+    const isArray = Array.isArray(req.body);
+    const bodyType = isArray ? 'array' : typeof req.body;
+    let details = `type=${bodyType}`;
+    if (bodyType === 'object' && req.body && !isArray) {
+      const keys = Object.keys(req.body);
+      details += `, keys=[${keys.slice(0, 20).join(', ')}]`;
+      if (keys.length > 20) {
+        details += `, +${keys.length - 20} more`;
+      }
     }
+    if (contentLength) {
+      details += `, content-length=${contentLength}`;
+    }
+    log(`  Body: ${details}`);
   }
 
   // Log response status code when response finishes
   const originalSend = res.send;
   res.send = function(data) {
-    outputChannel.appendLine(`[${timestamp}] ${req.method} ${req.path} → ${res.statusCode}`);
+    log(`[${timestamp}] ${req.method} ${req.path} → ${res.statusCode}`);
     return originalSend.call(this, data);
   };
 
@@ -645,13 +655,14 @@ app.get('/health', (req: Request, res: Response) => {
 
 app.use((req: Request, res: Response) => {
   const outputChannel = getOutputChannel();
-  outputChannel.appendLine(`\n⚠️  UNIMPLEMENTED ENDPOINT: ${req.method} ${req.path}`);
+  const log = outputChannel ? (msg: string) => outputChannel.appendLine(msg) : console.log;
+  log(`\n⚠️  UNIMPLEMENTED ENDPOINT: ${req.method} ${req.path}`);
   if (Object.keys(req.query).length > 0) {
-    outputChannel.appendLine(`   Query: ${JSON.stringify(req.query)}`);
+    log(`   Query: ${JSON.stringify(req.query)}`);
   }
   if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
-    const bodyStr = JSON.stringify(req.body);
-    outputChannel.appendLine(`   Body: ${bodyStr.substring(0, 300)}${bodyStr.length > 300 ? '...' : ''}`);
+    const contentLength = req.headers['content-length'];
+    log(`   Body: [omitted] content-length=${contentLength ?? 'unknown'}`);
   }
 
   res.status(404).json(
