@@ -1,5 +1,5 @@
 {
-  "name": "@copilot-proxy/core",
+  "name": "@hyorman/copilot-proxy-core",
   "version": "1.0.0",
   "description": "Core shared library for Copilot Proxy",
   "type": "module",

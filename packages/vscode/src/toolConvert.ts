@@ -2,11 +2,11 @@
  * VS Code-Specific Tool Conversion Utilities
  *
  * Converts between OpenAI tool formats and VS Code Language Model API tool types.
- * Platform-independent conversions live in @copilot-proxy/core.
+ * Platform-independent conversions live in @hyorman/copilot-proxy-core.
  */
 
 import * as vscode from 'vscode';
-import { FunctionTool, ChatCompletionRequest, AssistantTool } from '@copilot-proxy/core';
+import { FunctionTool, ChatCompletionRequest, AssistantTool } from '@hyorman/copilot-proxy-core';
 
 /**
  * Convert OpenAI FunctionTool[] to VS Code LanguageModelChatTool[]

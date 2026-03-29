@@ -1,4 +1,4 @@
-# @copilot-proxy/cli
+# @hyorman/copilot-proxy-cli
 
 OpenAI-compatible proxy server for GitHub Copilot. Use Copilot models through standard OpenAI API endpoints from any HTTP client.
 
@@ -8,7 +8,7 @@ OpenAI-compatible proxy server for GitHub Copilot. Use Copilot models through st
 
 ```bash
 export GITHUB_TOKEN=ghp_...
-npx @copilot-proxy/cli
+npx @hyorman/copilot-proxy-cli
 ```
 
 Test it:
@@ -24,13 +24,13 @@ curl http://localhost:3000/v1/chat/completions \
 **Run without installing (recommended):**
 
 ```bash
-npx @copilot-proxy/cli
+npx @hyorman/copilot-proxy-cli
 ```
 
 **Install globally:**
 
 ```bash
-npm install -g @copilot-proxy/cli
+npm install -g @hyorman/copilot-proxy-cli
 copilot-proxy
 ```
 

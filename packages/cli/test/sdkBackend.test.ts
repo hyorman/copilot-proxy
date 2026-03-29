@@ -12,8 +12,8 @@ vi.mock('@github/copilot-sdk', () => {
   return { CopilotClient, approveAll: vi.fn() };
 });
 
-vi.mock('@copilot-proxy/core', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@copilot-proxy/core')>();
+vi.mock('@hyorman/copilot-proxy-core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@hyorman/copilot-proxy-core')>();
   let counter = 0;
   return {
     ...original,
@@ -23,12 +23,12 @@ vi.mock('@copilot-proxy/core', async (importOriginal) => {
 
 import { SdkBackend, type SdkOptions } from '../src/sdkBackend.js';
 import { CopilotClient } from '@github/copilot-sdk';
-import { generateId } from '@copilot-proxy/core';
+import { generateId } from '@hyorman/copilot-proxy-core';
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatCompletionChunk,
-} from '@copilot-proxy/core';
+} from '@hyorman/copilot-proxy-core';
 
 // --------------- Mock session factory ---------------
 

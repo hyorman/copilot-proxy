@@ -28,7 +28,7 @@ import {
   state as assistantsState,
   skillsState,
   setSkillStorageDir,
-} from '@copilot-proxy/core';
+} from '@hyorman/copilot-proxy-core';
 import { SdkBackend } from './sdkBackend.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
