@@ -14,7 +14,7 @@ import {
   ChatCompletionResponse,
   ChatCompletionChunk,
   generateId,
-} from '@copilot-proxy/core';
+} from '@hyorman/copilot-proxy-core';
 
 type ToolCall = {
   id: string;

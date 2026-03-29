@@ -13,7 +13,7 @@ import {
   SerializedSkillsState,
   setSkillStorageDir,
   Logger,
-} from '@copilot-proxy/core';
+} from '@hyorman/copilot-proxy-core';
 import { VSCodeBackend } from './vscodeBackend';
 
 let outputChannel: vscode.OutputChannel;

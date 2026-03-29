@@ -55,7 +55,7 @@ vi.mock('vscode', () => {
   };
 });
 
-vi.mock('@copilot-proxy/core', () => ({
+vi.mock('@hyorman/copilot-proxy-core', () => ({
   createApp: vi.fn(),
   setApiTokens: vi.fn(),
   addApiToken: vi.fn(),

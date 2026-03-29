@@ -1,5 +1,5 @@
 /**
- * @copilot-proxy/core
+ * @hyorman/copilot-proxy-core
  *
  * Shared platform-independent logic for the Copilot Proxy.
  * Exports server factory, types, state management, assistants, and skills modules.

@@ -1,7 +1,7 @@
 /**
  * VS Code Chat Backend
  *
- * Implements the ChatBackend interface from @copilot-proxy/core using
+ * Implements the ChatBackend interface from @hyorman/copilot-proxy-core using
  * VS Code's Language Model API. This is the platform-specific bridge
  * that lets the shared server talk to VS Code's LLM providers.
  */
@@ -19,7 +19,7 @@ import {
   StructuredMessageContent,
   ToolCall,
   ToolCallChunk,
-} from '@copilot-proxy/core';
+} from '@hyorman/copilot-proxy-core';
 import { toVSCodeTools, toToolMode } from './toolConvert';
 
 // Extended LanguageModelChat for optional id access

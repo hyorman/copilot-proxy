@@ -8,7 +8,7 @@ OpenAI-compatible proxy server for GitHub Copilot. Use Copilot models through st
 | **Backend** | `@github/copilot-sdk` | VS Code Language Model API |
 | **Auth** | `GITHUB_TOKEN` env var | VS Code Copilot session |
 | **Embeddings** | Not supported | Supported (proposed API) |
-| **Install** | `npx @copilot-proxy/cli` | [`.vsix` package](https://github.com/hyorman/copilot-proxy/releases) |
+| **Install** | `npx @hyorman/copilot-proxy-cli` | [`.vsix` package](https://github.com/hyorman/copilot-proxy/releases) |
 | **Docs** | [CLI README](packages/cli/README.md) | [Extension README](packages/vscode/README.md) |
 
 > This project is not affiliated with GitHub, Microsoft, or OpenAI. It is intended for research, experimentation, and local prototyping rather than production use.
@@ -23,7 +23,7 @@ This project was originally inspired by [`copilot-proxy`](https://github.com/lut
 
 ```bash
 export GITHUB_TOKEN=ghp_...
-npx @copilot-proxy/cli
+npx @hyorman/copilot-proxy-cli
 ```
 
 ### VS Code Extension
@@ -252,8 +252,8 @@ curl -X POST http://localhost:3000/v1/assistants/asst_abc123 \
 
 | Package | Path | Description |
 |---|---|---|
-| `@copilot-proxy/core` | `packages/core` | Shared server logic, OpenAI-compatible routes, types |
-| `@copilot-proxy/cli` | `packages/cli` | CLI proxy server using `@github/copilot-sdk` |
+| `@hyorman/copilot-proxy-core` | `packages/core` | Shared server logic, OpenAI-compatible routes, types |
+| `@hyorman/copilot-proxy-cli` | `packages/cli` | CLI proxy server using `@github/copilot-sdk` |
 | `copilot-proxy` | `packages/vscode` | VS Code extension |
 
 ### Build

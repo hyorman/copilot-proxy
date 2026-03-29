@@ -1,5 +1,5 @@
 {
-  "name": "@copilot-proxy/cli",
+  "name": "@hyorman/copilot-proxy-cli",
   "version": "1.0.0",
   "description": "OpenAI-compatible proxy server for GitHub Copilot, powered by the Copilot SDK",
   "type": "module",
@@ -34,7 +34,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@copilot-proxy/core": "^1.0.0",
+    "@hyorman/copilot-proxy-core": "^1.0.0",
     "@github/copilot-sdk": "^0.2.0"
   },
   "devDependencies": {
