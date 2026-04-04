@@ -72,6 +72,7 @@
     "build": "node esbuild.mjs",
     "build:check": "tsc --noEmit",
     "package": "npm run build && npx @vscode/vsce package --no-dependencies",
+    "publish:vsce": "npm run build:check && npx @vscode/vsce publish --no-dependencies --allow-all-proposed-apis",
     "test": "vitest run"
   },
   "devDependencies": {

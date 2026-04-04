@@ -26,7 +26,7 @@
     "package:vscode": "npm run sync-versions && npm run package -w packages/vscode",
     "publish:core": "npm run sync-versions && npm publish -w packages/core --access public",
     "publish:cli": "npm run sync-versions && npm publish -w packages/cli --access public",
-    "publish:vscode": "npm run sync-versions && npm run build:check -w packages/vscode && npx @vscode/vsce publish --no-dependencies --allow-all-proposed-apis",
+    "publish:vscode": "npm run sync-versions && npm run publish:vsce -w packages/vscode",
     "publish:all": "npm run sync-versions && npm test && npm publish -w packages/core --access public && npm publish -w packages/cli --access public && npm run publish:vscode",
     "publish:dry": "npm run sync-versions && npm publish -w packages/core --access public --dry-run && npm publish -w packages/cli --access public --dry-run"
   },
