@@ -142,6 +142,19 @@ export function createApp(backend: ChatBackend, logger: Logger) {
       );
     }
 
+    const { input } = req.body;
+    const raw = Array.isArray(input) ? input : [input];
+    const filtered = raw.filter(s => typeof s === 'string' && s.length > 0);
+    if (filtered.length === 0) {
+      return res.status(400).json(
+        errorResponse(
+          'Embedding input must be a non-empty string or an array of non-empty strings.',
+          'invalid_request_error'
+        )
+      );
+    }
+    req.body.input = filtered.length === 1 && !Array.isArray(input) ? filtered[0] : filtered;
+
     try {
       const result = await backend.processEmbeddingRequest(req.body);
       res.json(result);

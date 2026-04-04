@@ -2,7 +2,7 @@
   "name": "copilot-proxy",
   "displayName": "Copilot Proxy",
   "icon": "assets/icon.jpg",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenAI-compatible proxy for GitHub Copilot",
   "publisher": "hyorman",
   "license": "MIT",
@@ -75,7 +75,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@hyorman/copilot-proxy-core": "^1.0.0",
+    "@hyorman/copilot-proxy-core": "^1.0.1",
     "@types/node": "^18.11.18",
     "@types/vscode": "^1.95.0",
     "esbuild": "^0.24.0",
