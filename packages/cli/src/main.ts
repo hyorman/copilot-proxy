@@ -8,7 +8,7 @@
  * Environment variables:
  *   PORT          - Server port (default: 3000)
  *   API_TOKENS    - Comma-separated bearer tokens for auth
- *   GITHUB_TOKEN  - GitHub token for SDK authentication
+ *   GITHUB_TOKEN  - GitHub token for SDK authentication (optional; uses device code flow if unset)
  *   DATA_DIR      - Directory for state persistence (default: ~/.copilot-sdk-proxy)
  *   CLI_PATH      - Path to Copilot CLI executable
  *   CLI_URL       - URL of existing CLI server to connect to
@@ -197,6 +197,7 @@ async function main(): Promise<void> {
     }
     process.exit(1);
   }
+  console.log(`  Auth mode: ${GITHUB_TOKEN ? 'token' : 'device code'}`);
 
   // Start Express server
   const server = startServer(backend, consoleLogger, PORT, allTokenValues);

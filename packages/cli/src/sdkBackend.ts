@@ -42,12 +42,15 @@ export class SdkBackend implements ChatBackend {
    * Initialize the CopilotClient. Must be called before any requests.
    */
   async init(options: SdkOptions = {}): Promise<void> {
-    this.client = new CopilotClient({
-      githubToken: options.githubToken,
+    const clientOpts: Record<string, unknown> = {
       cliPath: options.cliPath,
       cliUrl: options.cliUrl,
       autoStart: true,
-    });
+    };
+    if (options.githubToken) {
+      clientOpts.githubToken = options.githubToken;
+    }
+    this.client = new CopilotClient(clientOpts as any);
     await this.client.start();
     this.logger.log('CopilotClient started');
   }
@@ -401,17 +404,15 @@ export class SdkBackend implements ChatBackend {
     }
   }
 
-  getAvailableModels(): ModelInfo[] {
-    return [
-      { vendor: 'copilot', family: 'gpt-4o' },
-      { vendor: 'copilot', family: 'gpt-4o-mini' },
-      { vendor: 'copilot', family: 'gpt-4.1' },
-      { vendor: 'copilot', family: 'gpt-4.1-mini' },
-      { vendor: 'copilot', family: 'gpt-4.1-nano' },
-      { vendor: 'copilot', family: 'o3-mini' },
-      { vendor: 'copilot', family: 'o4-mini' },
-      { vendor: 'copilot', family: 'claude-sonnet-4' },
-      { vendor: 'copilot', family: 'gemini-2.5-pro' },
-    ];
+  private inferVendor(modelId: string): string {
+    if (/^(gpt-|o\d)/.test(modelId)) return 'openai';
+    if (modelId.startsWith('claude-')) return 'anthropic';
+    if (modelId.startsWith('gemini-')) return 'google';
+    return 'copilot';
+  }
+
+  async getAvailableModels(): Promise<ModelInfo[]> {
+    const sdkModels = await this.getClient().listModels();
+    return sdkModels.map((m: any) => ({ vendor: this.inferVendor(m.id), family: m.id, id: m.id }));
   }
 }

@@ -6,7 +6,7 @@ OpenAI-compatible proxy server for GitHub Copilot. Use Copilot models through st
 |---|---|---|
 | **Best for** | Headless / server / CI use | Local prototyping inside VS Code |
 | **Backend** | `@github/copilot-sdk` | VS Code Language Model API |
-| **Auth** | `GITHUB_TOKEN` env var | VS Code Copilot session |
+| **Auth** | `GITHUB_TOKEN` env var or device code flow | VS Code Copilot session |
 | **Embeddings** | Not supported | Supported (proposed API) |
 | **Install** | `npx @hyorman/copilot-proxy-cli` | [`.vsix` package](https://github.com/hyorman/copilot-proxy/releases) |
 | **Docs** | [CLI README](packages/cli/README.md) | [Extension README](packages/vscode/README.md) |
@@ -22,9 +22,10 @@ This project was originally inspired by [`copilot-proxy`](https://github.com/lut
 ### CLI
 
 ```bash
-export GITHUB_TOKEN=ghp_...
 npx @hyorman/copilot-proxy-cli
 ```
+
+If `GITHUB_TOKEN` is unset, the CLI uses the Copilot SDK's device code flow on first run.
 
 ### VS Code Extension
 

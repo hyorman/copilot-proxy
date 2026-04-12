@@ -8,6 +8,10 @@ vi.mock('@github/copilot-sdk', () => {
     this.start = vi.fn().mockResolvedValue(undefined);
     this.stop = vi.fn().mockResolvedValue(undefined);
     this.createSession = vi.fn();
+    this.listModels = vi.fn().mockResolvedValue([
+      { id: 'gpt-4o', name: 'GPT-4o' },
+      { id: 'claude-sonnet-4', name: 'Claude Sonnet 4' },
+    ]);
   });
   return { CopilotClient, approveAll: vi.fn() };
 });
@@ -457,14 +461,29 @@ describe('SdkBackend', () => {
   // ==================== getAvailableModels ====================
 
   describe('getAvailableModels', () => {
-    it('returns 9 models', () => {
-      expect(backend.getAvailableModels()).toHaveLength(9);
+    it('returns models from SDK listModels with inferred vendors', async () => {
+      await backend.init();
+      const models = await backend.getAvailableModels();
+      expect(models).toEqual([
+        { vendor: 'openai', family: 'gpt-4o', id: 'gpt-4o' },
+        { vendor: 'anthropic', family: 'claude-sonnet-4', id: 'claude-sonnet-4' },
+      ]);
     });
 
-    it('all models have vendor copilot', () => {
-      for (const model of backend.getAvailableModels()) {
-        expect(model.vendor).toBe('copilot');
-      }
+    it('infers vendor from model id prefix', async () => {
+      await backend.init();
+      const instance = (CopilotClient as unknown as ReturnType<typeof vi.fn>).mock.results[0].value;
+      instance.listModels.mockResolvedValueOnce([
+        { id: 'gpt-5', name: 'GPT-5' },
+        { id: 'claude-opus-4', name: 'Claude Opus 4' },
+        { id: 'o4-mini', name: 'O4 Mini' },
+        { id: 'gemini-2', name: 'Gemini 2' },
+        { id: 'unknown-model', name: 'Unknown' },
+      ]);
+      const models = await backend.getAvailableModels();
+      expect(models.map(m => m.vendor)).toEqual([
+        'openai', 'anthropic', 'openai', 'google', 'copilot',
+      ]);
     });
   });
 });

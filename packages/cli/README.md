@@ -7,9 +7,10 @@ OpenAI-compatible proxy server for GitHub Copilot. Use Copilot models through st
 ## Quick Start
 
 ```bash
-export GITHUB_TOKEN=ghp_...
 npx @hyorman/copilot-proxy-cli
 ```
+
+If `GITHUB_TOKEN` is unset, the CLI falls back to the Copilot SDK's device code flow on first run.
 
 Test it:
 
@@ -49,7 +50,7 @@ node packages/cli/out/main.js
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `GITHUB_TOKEN` | GitHub personal access token with Copilot access (**required**) | — |
+| `GITHUB_TOKEN` | GitHub personal access token with Copilot access (optional) | — |
 | `PORT` | Server listening port | `3000` |
 | `API_TOKENS` | Comma-separated bearer tokens for request authentication | — |
 | `DATA_DIR` | Directory for persisted state (tokens, assistants, skills) | `~/.copilot-sdk-proxy` |
@@ -65,6 +66,8 @@ GITHUB_TOKEN=ghp_...
 PORT=3001
 API_TOKENS=my-secret-token-1,my-secret-token-2
 ```
+
+If `GITHUB_TOKEN` is omitted, the CLI will prompt for device code authentication when the SDK needs to sign in.
 
 ## Token management
 
