@@ -318,7 +318,7 @@ export class VSCodeBackend implements ChatBackend {
           model: request.model,
           choices: [
             {
-              delta: { content: "" },
+              delta: {},
               index: 0,
               finish_reason: "stop",
             },

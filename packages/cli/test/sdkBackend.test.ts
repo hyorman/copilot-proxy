@@ -36,9 +36,10 @@ import type {
 
 // --------------- Mock session factory ---------------
 
-function createMockSession(options: { responseContent?: string; messages?: any[] } = {}) {
+function createMockSession(options: { responseContent?: string; messages?: any[]; emitDeltas?: boolean } = {}) {
   const handlers: Record<string, Function[]> = {};
   const responseContent = options.responseContent ?? 'Hello!';
+  const emitDeltas = options.emitDeltas ?? true;
   const messages = options.messages ?? [
     { type: 'assistant.message', data: { content: responseContent } },
   ];
@@ -51,9 +52,11 @@ function createMockSession(options: { responseContent?: string; messages?: any[]
     }),
     send: vi.fn((_payload: any) => {
       setTimeout(() => {
-        const deltaHandlers = handlers['assistant.message_delta'] ?? [];
-        for (const h of deltaHandlers) {
-          h({ data: { deltaContent: responseContent } });
+        if (emitDeltas) {
+          const deltaHandlers = handlers['assistant.message_delta'] ?? [];
+          for (const h of deltaHandlers) {
+            h({ data: { deltaContent: responseContent } });
+          }
         }
         const idleHandlers = handlers['session.idle'] ?? [];
         for (const h of idleHandlers) {
@@ -389,9 +392,10 @@ describe('SdkBackend', () => {
       await backend.init();
     });
 
-    function setupSession(responseContent: string, messages?: any[]) {
+    function setupSession(responseContent: string, messages?: any[], emitDeltas: boolean = true) {
       const session = createMockSession({
         responseContent,
+        emitDeltas,
         messages: messages ?? [
           { type: 'assistant.message', data: { content: responseContent } },
         ],
@@ -447,6 +451,19 @@ describe('SdkBackend', () => {
 
       const lastChunk = chunks[chunks.length - 1];
       expect(lastChunk.choices[0].finish_reason).toBe('stop');
+    });
+
+    it('falls back to the final assistant message when the SDK emits no delta events', async () => {
+      setupSession('Hello from final message', undefined, false);
+      const result = await backend.processChatRequest(makeRequest({ stream: true }));
+      const chunks = await collectChunks(result as AsyncIterable<ChatCompletionChunk>);
+
+      expect(chunks).toHaveLength(2);
+      expect(chunks[0].choices[0].delta.role).toBe('assistant');
+      expect(chunks[0].choices[0].delta.content).toBe('Hello from final message');
+      expect(chunks[0].choices[0].finish_reason).toBe('');
+      expect(chunks[1].choices[0].delta.content).toBeUndefined();
+      expect(chunks[1].choices[0].finish_reason).toBe('stop');
     });
 
     it('calls session.disconnect() after iteration', async () => {

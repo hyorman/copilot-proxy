@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockSelectChatModels = vi.fn();
 const mockComputeEmbeddings = vi.fn();
+const mockSendRequest = vi.fn();
 let mockEmbeddingModels: string[] = [];
 let throwOnEmbeddingModelsAccess = false;
 
@@ -10,6 +11,30 @@ vi.mock('vscode', () => {
     token = {};
     dispose() {}
   }
+
+  class MockLanguageModelTextPart {
+    constructor(public value: string) {}
+  }
+
+  class MockLanguageModelToolCallPart {
+    constructor(
+      public callId: string,
+      public name: string,
+      public input: unknown,
+    ) {}
+  }
+
+  class MockLanguageModelToolResultPart {
+    constructor(
+      public callId: string,
+      public parts: unknown[],
+    ) {}
+  }
+
+  const MockLanguageModelChatMessage = {
+    User: (content: unknown) => ({ role: 'user', content }),
+    Assistant: (content: unknown) => ({ role: 'assistant', content }),
+  };
 
   return {
     lm: {
@@ -48,6 +73,10 @@ vi.mock('vscode', () => {
       Global: 1,
     },
     CancellationTokenSource: MockCancellationTokenSource,
+    LanguageModelTextPart: MockLanguageModelTextPart,
+    LanguageModelToolCallPart: MockLanguageModelToolCallPart,
+    LanguageModelToolResultPart: MockLanguageModelToolResultPart,
+    LanguageModelChatMessage: MockLanguageModelChatMessage,
     LanguageModelChatToolMode: {
       Auto: 'Auto',
       Required: 'Required',
@@ -81,6 +110,7 @@ describe('model listing helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockEmbeddingModels = [];
+    mockSendRequest.mockReset();
     throwOnEmbeddingModelsAccess = false;
     mockSelectChatModels.mockResolvedValue([]);
     mockComputeEmbeddings.mockResolvedValue([]);
@@ -183,5 +213,63 @@ describe('model listing helpers', () => {
         index: 0,
       },
     ]);
+  });
+
+  it('streams a stop chunk with an empty delta object', async () => {
+    const vscode = await import('vscode');
+    mockSendRequest.mockResolvedValue({
+      stream: (async function* () {
+        yield new vscode.LanguageModelTextPart('Hello from VS Code');
+      })(),
+    });
+    mockSelectChatModels.mockResolvedValue([
+      { vendor: 'copilot', family: 'gpt-4o', id: 'gpt-4o', sendRequest: mockSendRequest },
+    ]);
+
+    const { VSCodeBackend } = await import('../src/vscodeBackend');
+    const backend = new VSCodeBackend({ log: vi.fn() });
+    const result = await backend.processChatRequest({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hi' }],
+      stream: true,
+    });
+
+    const chunks: any[] = [];
+    for await (const chunk of result as AsyncIterable<any>) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks[0].choices[0].delta.content).toBe('Hello from VS Code');
+    expect(chunks[0].choices[0].delta.role).toBe('assistant');
+    expect(chunks[1].choices[0].delta).toEqual({});
+    expect(chunks[1].choices[0].finish_reason).toBe('stop');
+  });
+
+  it('still emits a valid stop chunk when no text parts are streamed', async () => {
+    mockSendRequest.mockResolvedValue({
+      stream: (async function* () {
+        return;
+      })(),
+    });
+    mockSelectChatModels.mockResolvedValue([
+      { vendor: 'copilot', family: 'gpt-4o', id: 'gpt-4o', sendRequest: mockSendRequest },
+    ]);
+
+    const { VSCodeBackend } = await import('../src/vscodeBackend');
+    const backend = new VSCodeBackend({ log: vi.fn() });
+    const result = await backend.processChatRequest({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'Hi' }],
+      stream: true,
+    });
+
+    const chunks: any[] = [];
+    for await (const chunk of result as AsyncIterable<any>) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].choices[0].delta).toEqual({});
+    expect(chunks[0].choices[0].finish_reason).toBe('stop');
   });
 });

@@ -212,6 +212,7 @@ export class SdkBackend implements ChatBackend {
     try {
       let chunkIndex = 0;
       let firstChunk = true;
+      let emittedTextChunk = false;
 
       const deltaQueue: string[] = [];
       let idleResolved = false;
@@ -264,6 +265,7 @@ export class SdkBackend implements ChatBackend {
               finish_reason: '',
             }],
           };
+          emittedTextChunk = true;
           firstChunk = false;
           chunkIndex++;
           yield chunk;
@@ -278,6 +280,27 @@ export class SdkBackend implements ChatBackend {
         (m: any) => m.type === 'assistant.message'
       );
       const finalContent = (lastAssistant as any)?.data?.content ?? '';
+
+      if (!emittedTextChunk && finalContent) {
+        const fallbackChunk: ChatCompletionChunk = {
+          id: `chatcmpl-stream-${chunkIndex}`,
+          object: 'chat.completion.chunk',
+          created: Math.floor(Date.now() / 1000),
+          model: request.model,
+          choices: [{
+            delta: {
+              ...(firstChunk ? { role: 'assistant' } : {}),
+              content: finalContent,
+            },
+            index: 0,
+            finish_reason: '',
+          }],
+        };
+        emittedTextChunk = true;
+        firstChunk = false;
+        chunkIndex++;
+        yield fallbackChunk;
+      }
 
       if (hasTools && finalContent) {
         const { toolCalls } = this.parseToolCalls(finalContent);
@@ -316,7 +339,7 @@ export class SdkBackend implements ChatBackend {
         created: Math.floor(Date.now() / 1000),
         model: request.model,
         choices: [{
-          delta: { content: '' },
+          delta: {},
           index: 0,
           finish_reason: 'stop',
         }],
